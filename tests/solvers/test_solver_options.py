@@ -64,7 +64,13 @@ def test_options_are_pycanha_names() -> None:
     assert solvers.DirectSolverType is pcc.solvers.DirectSolverType
     assert solvers.IterativeSolverType is pcc.solvers.IterativeSolverType
     assert isinstance(solvers.MKL_ENABLED, bool)
-    expected = solvers.SolverEngine.MKL if solvers.MKL_ENABLED else solvers.SolverEngine.EIGEN
+    assert isinstance(solvers.ACCELERATE_ENABLED, bool)
+    if solvers.MKL_ENABLED:
+        expected = solvers.SolverEngine.MKL
+    elif solvers.ACCELERATE_ENABLED:
+        expected = solvers.SolverEngine.ACCELERATE
+    else:
+        expected = solvers.SolverEngine.EIGEN
     assert solvers.default_solver_engine() == expected
     assert solvers.resolve_solver_type(expected, solvers.DirectSolverType.DEFAULT) != (
         solvers.DirectSolverType.DEFAULT

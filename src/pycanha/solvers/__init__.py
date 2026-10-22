@@ -26,12 +26,16 @@ IterativeSolverType = pcc.solvers.IterativeSolverType
 
 #: Whether this build has Intel MKL, and so SolverEngine.MKL and SSLU_CGS.
 MKL_ENABLED: bool = pcc.solvers.MKL_ENABLED
+#: Whether SolverEngine.ACCELERATE can be used (macOS 15.5 or newer, Apple
+#: Accelerate). Without MKL it is the default engine.
+ACCELERATE_ENABLED: bool = pcc.solvers.ACCELERATE_ENABLED
 default_solver_engine = pcc.solvers.default_solver_engine
 resolve_solver_type = pcc.solvers.resolve_solver_type
 
 del pcc  # implementation detail; users reach the core through pycanha only
 
 __all__ = [
+    "ACCELERATE_ENABLED",
     "MKL_ENABLED",
     "SSLU",
     "SSLU_CGS",
