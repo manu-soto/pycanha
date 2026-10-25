@@ -188,10 +188,6 @@ warn_redundant_casts = true
 strict_equality = true
 
 [[tool.mypy.overrides]]
-module = "pycanha_core.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = "h5py.*"
 ignore_missing_imports = true
 
