@@ -101,6 +101,19 @@ _BOTH_SIDES = (1, 2)
 #: The two per-calculation activity selectors, in the order ACTIVITY pairs them.
 _ACTIVITY_ATTRIBUTES = ("radiative_active_side", "conductive_active_side")
 
+#: DEFINE_GEOMETRY_ATTRIBUTES names its per-surface attributes without a side
+#: number and applies them to the surfaces listed in ``shell_surfaces``; these
+#: are the side-numbered spellings the primitives use for the same attributes.
+_SIDELESS_ATTRIBUTES = {
+    "optical": "opt",
+    "colour": "colour",
+    "activity": "side",
+    "label": "label",
+    "criticality": "criticality",
+    "insulation": "insulation",
+    "model": "model",
+}
+
 
 def _rotation_matrix(x_ang: float, y_ang: float, z_ang: float) -> npt.NDArray[np.float64]:
     """Rotation for ESATAN's three angles, in radians.
@@ -1637,6 +1650,20 @@ class _Builder:
         # a group, a cut or an assembly affects everything inside it, which is
         # what the recursive form does explicitly.
         sides = self._selected_sides(call)
+        if call.name.upper() == "DEFINE_GEOMETRY_ATTRIBUTES":
+            selection = [key for key in ("faces", "solid_surfaces", "volumes") if key in call.args]
+            if selection:
+                # Per-face and per-solid selections have no counterpart on a
+                # mesh, which holds one value per side; applying them to the
+                # whole surface would change faces the statement does not name.
+                self.diagnostics.unsupported(
+                    "ERG_ATTRIBUTE_SELECTION",
+                    f"{call.name} with {selection[0]} was not applied: only shell_surfaces "
+                    "selections are supported",
+                    line=call.line,
+                )
+                return
+            call = _per_side(call, sides)
         self._override_objects([self.geometries[expr.name]], call, sides, call.line)
 
     def _selected_sides(self, call: ast.Call) -> Sequence[int]:
@@ -1661,6 +1688,23 @@ class _Builder:
         for target in targets:
             for item in _items_of(target):
                 self._apply_attributes(item.name, item, call, args, sides, line)
+
+
+def _per_side(call: ast.Call, sides: Sequence[int]) -> ast.Call:
+    """DEFINE_GEOMETRY_ATTRIBUTES with its side-less attributes spelled per side.
+
+    The statement writes ``optical = X`` for the surfaces it selects where a
+    primitive writes ``opt1`` / ``opt2``; respelling it once here lets the one
+    attribute path serve both.
+    """
+    args = dict(call.args)
+    for key, prefix in _SIDELESS_ATTRIBUTES.items():
+        expr = args.pop(key, None)
+        if expr is None:
+            continue
+        for side in sides:
+            args.setdefault(f"{prefix}{side}", expr)
+    return dataclasses.replace(call, args=args)
 
 
 def _items_of(

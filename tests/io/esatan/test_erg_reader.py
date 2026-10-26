@@ -1021,6 +1021,52 @@ def test_shell_surfaces_selects_which_sides_an_override_touches(tmp_path: Path) 
     assert mesh.side2_optical is None
 
 
+def test_define_geometry_attributes_spells_its_attributes_without_a_side(
+    tmp_path: Path,
+) -> None:
+    # ESATAN-TMS 2026: the selected sides take LOW (alpha 0.3, eps 0.05), the
+    # others stay black; P4's side 2 becomes inactive and red.
+    plates = "".join(
+        f"GEOMETRY {name};\n{name} = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0, "
+        "opt1 = BLK, opt2 = BLK);\n"
+        for name in ("P1", "P2", "P3", "P4")
+    )
+    model, _ = build(
+        tmp_path,
+        "OPTICAL BLK;\nDEFINE_OPTICAL (optical = BLK, ir_emiss = 1.0, solar_absorb = 1.0);\n"
+        "OPTICAL LOW;\nDEFINE_OPTICAL (optical = LOW, ir_emiss = 0.05, solar_absorb = 0.3);\n"
+        + plates
+        + "GEOMETRY G1;\nG1 = P1 + P2;\n"
+        "DEFINE_GEOMETRY_ATTRIBUTES(geometry = G1, shell_surfaces = {1}, optical = LOW);\n"
+        "DEFINE_GEOMETRY_ATTRIBUTES(geometry = P3, shell_surfaces = {2}, optical = LOW);\n"
+        "DEFINE_GEOMETRY_ATTRIBUTES(geometry = P4, shell_surfaces = {2}, "
+        'activity = "Inactive", colour = "RED");',
+    )
+
+    def optical(name: str, side: int) -> str:
+        material = getattr(model.get_item(name).thermal_mesh, f"side{side}_optical")
+        return material.name
+
+    assert [optical("P1", 1), optical("P1", 2)] == ["LOW", "BLK"]
+    assert [optical("P2", 1), optical("P2", 2)] == ["LOW", "BLK"]
+    assert [optical("P3", 1), optical("P3", 2)] == ["BLK", "LOW"]
+    mesh = model.get_item("P4").thermal_mesh
+    assert mesh.is_side_active(1)
+    assert not mesh.is_side_active(2)
+    assert list(mesh.side2_color.rgb) == list(pcc.gmm.Color.get_rgb_from_color_palette("RED"))
+
+
+def test_define_geometry_attributes_with_a_face_selection_is_skipped(tmp_path: Path) -> None:
+    model, diagnostics = build(
+        tmp_path,
+        "OPTICAL LOW;\nDEFINE_OPTICAL (optical = LOW, ir_emiss = 0.05, solar_absorb = 0.3);\n"
+        "GEOMETRY R;\nR = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0, nodes1 = 2);\n"
+        'DEFINE_GEOMETRY_ATTRIBUTES(geometry = R, faces = {"R:face1"}, optical = LOW);',
+    )
+    assert model.get_item("R").thermal_mesh.side1_optical is None
+    assert "ERG_ATTRIBUTE_SELECTION" in diagnostics.codes()
+
+
 def test_expressions_and_variables_are_evaluated(tmp_path: Path) -> None:
     model, _ = build(
         tmp_path,

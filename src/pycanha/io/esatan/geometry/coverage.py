@@ -222,7 +222,11 @@ _INVENTORY: Mapping[str, _Entry] = {
     ),
     "INCLUDE": _Entry("statement", "spliced, keeping per-file line numbers", status="supported"),
     "DEFINE (substitution)": _Entry("statement", status="unsupported"),
-    "DEFINE_GEOMETRY_ATTRIBUTES": _Entry("statement", status="supported"),
+    "DEFINE_GEOMETRY_ATTRIBUTES": _Entry(
+        "statement",
+        "shell_surfaces selections; faces / solid_surfaces / volumes selections are skipped",
+        status="lossy",
+    ),
     "SET_ATTRIBUTE_RECURSIVE": _Entry("statement", status="supported"),
     "dotted attribute assignment": _Entry("statement", status="supported"),
     "REMOVE_FACE / RESTORE_FACES": _Entry(
