@@ -953,7 +953,9 @@ UNSUPPORTED_CONSTRUCTS: dict[str, str] = {
 #: reason, and separately from the catch-all summary.
 GEOMETRY_ALTERING_PROCEDURES: dict[str, str] = {
     "REMOVE_FACE": (
-        "the face pair stays in place, so the surface keeps area the source model does not have"
+        "the face pair is one cell of a meshed face (or the face was not found), which the "
+        "scene tree cannot remove; it stays in place, so the surface keeps area the source "
+        "model does not have"
     ),
     "RESTORE_FACE": "no face was ever removed here, so there is nothing to restore",
     "RESTORE_FACES": "no face was ever removed here, so there is nothing to restore",

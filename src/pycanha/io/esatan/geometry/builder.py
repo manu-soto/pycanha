@@ -164,6 +164,13 @@ class _Builder:
         self._deleted: list[GeometryItem | GeometryGroup | GeometryGroupCutted] = []
         """Geometries DELETE_GEOMETRY took out, kept alive but never attached."""
 
+        self._removed: list[GeometryItem] = []
+        """Geometries taken out by REMOVE_FACE (whole face pairs).  The objects
+        themselves are kept: an id() of a dropped wrapper can be reused."""
+        self._faces: dict[str, list[GeometryItem]] = {}
+        """The faces of each decomposed box / prism, in ESATAN's order, as built
+        (REMOVE_FACE counts face pairs over all of them, removed or not)."""
+
     # -- entry point -------------------------------------------------------
 
     def run(self, parsed: ast.ModelFile) -> None:
@@ -236,7 +243,7 @@ class _Builder:
         attached: set[int] = set()
         for name in roots:
             geometry = self.geometries[name]
-            if id(geometry) in attached:
+            if id(geometry) in attached or self._is_removed(geometry):
                 continue
             attached.add(id(geometry))
             self.model.add(geometry)
@@ -404,6 +411,8 @@ class _Builder:
         elif function in ("DELETE_GEOMETRY", "DELETE_SHELL"):
             self._delete_geometry(call)
         elif function in GEOMETRY_ALTERING_PROCEDURES:
+            if function == "REMOVE_FACE" and self._remove_face(call):
+                return
             self.diagnostics.error(
                 "ERG_FACE_EDIT",
                 f"{statement.name} was not applied: {GEOMETRY_ALTERING_PROCEDURES[function]}",
@@ -449,6 +458,64 @@ class _Builder:
                     if known is child:
                         self.consumed.discard(known_name)
                         self._released.add(known_name)
+
+    def _remove_face(self, call: ast.Call) -> bool:
+        """``REMOVE_FACE(face = "shell:faceN")``: take a face pair out of the model.
+
+        ESATAN removes the named face and the one behind it, and the pair "takes
+        no part in any calculations"; ``faceN`` counts the faces of the shell
+        side 1 / side 2 alternately, so face pair ``(N - 1) // 2`` in the
+        shell's own face order (for a box, across its six faces in ESATAN's
+        order).  A face pair that is a whole geometry here -- a face of a box
+        meshed 1 x 1, or an unmeshed shell -- is dropped from its group.  Making
+        it transparent instead is not equivalent: a transparent face lying in
+        the plane of a kept face hides that face from rays.  Returns False when
+        the pair is one cell of a meshed face, which needs a per-face-pair mask
+        in the core; the caller then reports the statement as not applied.
+        """
+        args = self._arguments(call)
+        name, _, face = args.text("face", "").partition(":")
+        name = name.strip()
+        number = face.strip().lower().removeprefix("face")
+        geometry = self.geometries.get(name)
+        if geometry is None or not number.isdigit() or int(number) < 1:
+            return False
+        pair = (int(number) - 1) // 2
+        items = self._faces.get(name) or list(_items_of(geometry))
+        for item in items:
+            count = item.thermal_mesh.num_face_pairs
+            if pair >= count:
+                pair -= count
+                continue
+            if count != 1:
+                return False
+            if self._is_removed(item):
+                return True
+            parent = self._parent_of(item)
+            if parent is not None:
+                parent.remove_child(item)
+            self._removed.append(item)
+            self.diagnostics.info(
+                "ERG_FACE_REMOVED",
+                f"'{name}:face{number}' removed: geometry '{item.name}' is left out",
+                line=call.line,
+            )
+            return True
+        return False
+
+    def _is_removed(self, geometry: object) -> bool:
+        return any(geometry is removed for removed in self._removed)
+
+    def _parent_of(self, item: GeometryItem) -> GeometryGroup | None:
+        """The registered group that holds *item* directly, if any."""
+        for geometry in self.geometries.values():
+            if (
+                isinstance(geometry, GeometryGroup)
+                and not isinstance(geometry, GeometryGroupCutted)
+                and any(child is item for child in geometry.children)
+            ):
+                return geometry
+        return None
 
     # -- values and materials ----------------------------------------------
 
@@ -804,6 +871,7 @@ class _Builder:
             offset += item.thermal_mesh.num_face_pairs
             items.append(item)
         self._register(name, GeometryGroup(name, list(items)))
+        self._faces[name] = items
         return offset > len(faces)
 
     @staticmethod
@@ -1166,6 +1234,9 @@ class _Builder:
                     f"'{owner}' refers to '{expr.name}', which was never built",
                     line=line,
                 )
+            return None
+        if self._is_removed(geometry):
+            # Its only face pair was removed: nothing of it takes part.
             return None
         if expr.name in self.consumed:
             # A shell may take part in the hierarchy only once; reusing one
