@@ -77,6 +77,9 @@ _NODE_HEAD_RE = re.compile(r"\b([DBX])\s*(\d+)\s*(?:=\s*'([^']*)'\s*)?", re.IGNO
 _GL_RE = re.compile(r"\bGL\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(.+)", re.DOTALL)
 _GR_RE = re.compile(r"\bGR\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(.+)", re.DOTALL)
 _OTHER_COND_RE = re.compile(r"\b(GL|GR|GF|GV|GP|M)\s*\([^)]*\)\s*=", re.IGNORECASE)
+# A geometric node entity in an expression (``A12``, ``EPS3``): the formula
+# engine has no entity for it, but in a deck its value is fixed data.
+_NODE_ATTR_REF_RE = re.compile(r"\b(ALP|EPS|FX|FY|FZ|A)(\d+)\b", re.IGNORECASE)
 _ARRAY_DEF_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(.*?);",
     re.DOTALL,
@@ -867,7 +870,9 @@ class ESATANReader:
                 )
                 continue
             try:
-                formula = formulas.create_formula(entity, pending.expr)
+                formula = formulas.create_formula(
+                    entity, self._inline_node_attributes(pending.expr)
+                )
             except (ValueError, RuntimeError) as exc:
                 log.warning(
                     f"{pending.label} = {pending.expr!r}: cannot create formula "
@@ -886,6 +891,27 @@ class ESATANReader:
                     f"apply_formulas() failed after parsing ({exc}); call it "
                     "manually before solving."
                 )
+
+    def _inline_node_attributes(self, expr: str) -> str:
+        """Replace ``A``/``ALP``/``EPS``/``FX``/``FY``/``FZ`` of a node by its value.
+
+        The formula engine has entities for T, C, the heat sources and the
+        conductors only. These geometric entities are fixed data in a deck,
+        so their value is what ESATAN computes with. A user constant of the
+        same name is left alone.
+        """
+        nodes = self._tmm.nodes
+        params = self._tmm.parameters
+
+        def value(match: re.Match[str]) -> str:
+            name = match.group(0)
+            num = int(match.group(2))
+            if params.contains(name) or not nodes.is_node(num):
+                return name
+            getter = getattr(nodes, "get_" + ESATAN_NODE_ATTRS[match.group(1).upper()])
+            return repr(float(getter(num)))
+
+        return _NODE_ATTR_REF_RE.sub(value, expr)
 
 
 # ---------------------------------------------------------- module helpers
