@@ -681,6 +681,18 @@ def test_inactive_surface(tmp_path: Path) -> None:
     assert mesh.conductive_active_side is ActiveSide.SIDE2
 
 
+def test_thm_active_surface_only_conducts(tmp_path: Path) -> None:
+    # ESATAN reads "THM_ACTIVE" as "Conductive".
+    model, diagnostics = build(
+        tmp_path,
+        'GEOMETRY R;\nR = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0, side2 = "THM_ACTIVE");',
+    )
+    mesh = model.get_item("R").thermal_mesh
+    assert mesh.radiative_active_side is ActiveSide.SIDE1
+    assert mesh.conductive_active_side is ActiveSide.BOTH
+    assert "ERG_UNKNOWN_ACTIVITY" not in diagnostics.codes()
+
+
 def test_colour_resolves_through_the_shared_palette(tmp_path: Path) -> None:
     model, _ = build(
         tmp_path,
