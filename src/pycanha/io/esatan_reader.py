@@ -714,8 +714,10 @@ class ESATANReader:
         node_num = int(head_match.group(2))
 
         rest = text[head_match.end() :]
-        # Detect supernode merge syntax: "= A:5 + B:12" or any colon path.
-        if ":" in text:
+        # Detect supernode merge syntax: "= A:5 + B:12" or any colon path. A
+        # colon inside the label is not one: ESATAN labels the shells of a
+        # cut geometry '<model>:<shell>'.
+        if ":" in _without_strings(text):
             log.error(
                 f"$NODES: submodel/supernode references not supported yet in {text!r}; "
                 "skipping. # TODO: support submodels."
@@ -944,6 +946,11 @@ class ESATANReader:
 
 
 # ---------------------------------------------------------- module helpers
+
+
+def _without_strings(text: str) -> str:
+    """``text`` with the content of its quoted strings removed."""
+    return re.sub(r"'[^']*'|\"[^\"]*\"", "''", text)
 
 
 def _apply_substitutions(text: str, subs: dict[str, str]) -> str:

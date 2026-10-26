@@ -135,6 +135,16 @@ class TestParseNodes:
         node = reader._tmm.nodes.get_node_from_node_num(3)
         assert pytest.approx(1.0e-7 * 2900.0 * 1400.0) == node.C
 
+    def test_colon_in_label(self, reader: ESATANReader) -> None:
+        # ESATAN labels the shells of a cut geometry '<model>:<shell>'.
+        reader.parse_nodes("D7 = 'MODEL:SHELL', T = 0.0, C = 1.0;\n")
+        node = reader._tmm.nodes.get_node_from_node_num(7)
+        assert pytest.approx(1.0) == node.C
+
+    def test_supernode_reference_skipped(self, reader: ESATANReader) -> None:
+        reader.parse_nodes("D8 = SUB:5 + SUB:12;\n")
+        assert reader._tmm.nodes.num_nodes == 0
+
 
 # ------------------------------------------------------------ $CONDUCTORS
 
