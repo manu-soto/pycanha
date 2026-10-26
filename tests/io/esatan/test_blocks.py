@@ -207,6 +207,33 @@ class TestParseConductors:
             2.0 * 7.0 + 5.3
         )
 
+    def test_parallel_numeric_conductors_summed(self, reader: ESATANReader) -> None:
+        # ESATAN adds the conductors declared more than once for the same
+        # pair, in either node order.
+        self._setup_nodes(reader)
+        reader.parse_conductors(
+            "GL(1,2) = 0.5;\nGL(1,2) = 0.3;\nGL(2,3) = 1.0;\nGL(3,2) = 0.4;\n"
+            "GR(1,3) = 0.02;\nGR(3,1) = 0.06;\n"
+        )
+        gl = reader._tmm.conductive_couplings
+        assert gl.get_coupling_value(1, 2) == pytest.approx(0.8)
+        assert gl.get_coupling_value(2, 3) == pytest.approx(1.4)
+        assert reader._tmm.radiative_couplings.get_coupling_value(1, 3) == pytest.approx(0.08)
+
+    def test_parallel_symbolic_conductors_summed(self, reader: ESATANReader) -> None:
+        self._setup_nodes(reader)
+        reader.parse_constants("$REAL\n  k = 2.0;\n")
+        reader.parse_conductors(
+            "GL(1,2) = 0.5;\nGL(2,1) = k * 3.0;\nGL(1,2) = 0.25;\n"
+            "GL(2,3) = k;\nGL(3,2) = k * 2.0;\n"
+        )
+        reader._apply_pending_formulas()
+        # One formula per pair, which also carries the pair's numeric conductors.
+        assert len(list(reader._tmm.formulas.formulas)) == 2
+        gl = reader._tmm.conductive_couplings
+        assert gl.get_coupling_value(1, 2) == pytest.approx(0.5 + 6.0 + 0.25)
+        assert gl.get_coupling_value(2, 3) == pytest.approx(6.0)
+
 
 # ------------------------------------------------ intrinsics rejected for now
 
@@ -238,4 +265,18 @@ class TestIntrinsicsRejected:
         reader._apply_pending_formulas()
         # No formula attached; coupling stays at its placeholder value.
         assert reader._tmm.conductive_couplings.get_coupling_value(1, 2) == 0.0
+        assert len(list(reader._tmm.formulas.formulas)) == 0
+
+    def test_parallel_conductor_with_cndfn1_keeps_numeric_sum(self, reader: ESATANReader) -> None:
+        reader.parse_arrays("$REAL\nk(2,2) = 0.0, 1.0, 100.0, 2.0;\n")
+        for nn, t in [(1, 25.0), (2, 50.0)]:
+            n = pc.tmm.Node(nn)
+            n.T = t
+            reader._tmm.add_node(n)
+        reader.parse_conductors(
+            "GL(1,2) = 0.5;\nGL(1,2) = CNDFN1(T1, T2, k, 1) * 9.530846D-03;\nGL(2,1) = 0.25;\n"
+        )
+        reader._apply_pending_formulas()
+        # The pair's formula is rejected; its numeric conductors still add up.
+        assert reader._tmm.conductive_couplings.get_coupling_value(1, 2) == pytest.approx(0.75)
         assert len(list(reader._tmm.formulas.formulas)) == 0

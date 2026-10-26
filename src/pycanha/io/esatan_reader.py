@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -155,6 +155,12 @@ class ESATANReader:
         # after the whole network is built (entities need their nodes /
         # couplings to exist).
         self._pending_formulas: list[_PendingFormula] = []
+        # ESATAN adds the conductors declared more than once for the same pair
+        # (in either order). Keyed by (kind, smaller node, larger node): the
+        # sum of the numeric ones, and the index in ``_pending_formulas`` of
+        # the pair's formula when one of them is symbolic.
+        self._conductor_sums: dict[tuple[str, int, int], float] = {}
+        self._conductor_formula_idx: dict[tuple[str, int, int], int] = {}
         # Best-effort Python translation of the imperative blocks, keyed by
         # block keyword (e.g. "$INITIAL"); emitted to <basename>.py on request.
         self._translated_blocks: dict[str, list[str]] = {}
@@ -814,14 +820,54 @@ class ESATANReader:
             except SafeEvalError:
                 value = None
 
+        self._add_conductor(kind, n1, n2, clean_expr, value)
+
+    def _add_conductor(
+        self,
+        kind: str,
+        n1: int,
+        n2: int,
+        clean_expr: str,
+        value: float | None,
+    ) -> None:
+        """Add one conductor, summed with any declared before for the pair.
+
+        ``value`` is the conductor's number, or ``None`` when ``clean_expr``
+        is symbolic.
+        """
+        key = (kind, min(n1, n2), max(n1, n2))
+        idx = self._conductor_formula_idx.get(key)
+
         if value is not None:
-            self._add_conductor_value(kind, n1, n2, value)
+            total = self._conductor_sums.get(key, 0.0) + value
+            self._conductor_sums[key] = total
+            # Also when the pair has a formula: the numeric sum stays as the
+            # value if that formula cannot be created.
+            self._add_conductor_value(kind, n1, n2, total)
+            if idx is not None:
+                self._extend_pending_formula(idx, repr(value))
+            return
+
+        if idx is not None:
+            self._extend_pending_formula(idx, clean_expr)
             return
 
         # Symbolic: create the coupling with a placeholder value and defer the
-        # formula (the entity references this coupling, which must exist).
-        self._add_conductor_value(kind, n1, n2, 0.0)
+        # formula (the entity references this coupling, which must exist). The
+        # formula sets the whole value, so it carries the numeric conductors
+        # already declared for the pair.
+        numeric = self._conductor_sums.get(key)
+        if numeric is None:
+            self._add_conductor_value(kind, n1, n2, 0.0)
+        else:
+            clean_expr = f"{numeric!r} + ({clean_expr})"
+        self._conductor_formula_idx[key] = len(self._pending_formulas)
         self._pending_formulas.append(_PendingFormula(clean_expr, kind, n1, n2))
+
+    def _extend_pending_formula(self, idx: int, term: str) -> None:
+        """Add ``term`` to the pending conductor formula at ``idx``."""
+        pending = self._pending_formulas[idx]
+        self._pending_formulas[idx] = replace(pending, expr=f"({pending.expr}) + ({term})")
 
     def _add_conductor_value(
         self,
