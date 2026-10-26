@@ -49,6 +49,40 @@ _NODE_ATTRIBUTE_INDICES: Final[dict[str, int]] = {
     "fy": 14,
     "fz": 15,
 }
+# Node attribute of each column name ESATAN writes in thermalNodesRealAttributes.
+_TMD_COLUMN_ATTRIBUTES: Final[dict[str, str]] = {
+    "Temperature": "T",
+    "Capacitance": "C",
+    "Total_Albedo_Heat_Source": "qa",
+    "Total_Earth_Heat_Source": "qe",
+    "Total_Internal_Heat_Source": "qi",
+    "Total_Rest_Heat_Source": "qr",
+    "Total_Solar_Heat_Source": "qs",
+    "Area": "a",
+    "Solar_Absorptivity": "aph",
+    "Infra-Red_Emissivity": "eps",
+    "X_Coordinate": "fx",
+    "Y_Coordinate": "fy",
+    "Z_Coordinate": "fz",
+}
+
+
+def _tmd_node_columns(analysis_group: Any) -> dict[str, int]:
+    """Node attribute -> column of ``thermalNodesRealData``.
+
+    DMPTMD can dump a subset of the node entities (``'NODES(T, QI)'``); the
+    columns present are named in ``thermalNodesRealAttributes``. A file
+    without that dataset is read with the layout of a full dump.
+    """
+    if "thermalNodesRealAttributes" not in analysis_group:
+        return dict(_NODE_ATTRIBUTE_INDICES)
+    names = np.asarray(analysis_group["thermalNodesRealAttributes"]).astype("U")
+    return {
+        _TMD_COLUMN_ATTRIBUTES[name.strip()]: column
+        for column, name in enumerate(names)
+        if name.strip() in _TMD_COLUMN_ATTRIBUTES
+    }
+
 
 _BLOCK_KEYWORDS: Final[tuple[str, ...]] = (
     "$LOCALS",
@@ -243,15 +277,29 @@ class ESATANReader:
                     f"{active_node_numbers.size} active, {inactive_numbers.size} inactive"
                 )
 
-            self._add_tmd_nodes(active_node_numbers, active_node_types, active_node_real_data)
-            self._add_tmd_conductive_couplings(analysis_group, data_group, active_node_mask)
-            self._add_tmd_radiative_couplings(analysis_group, data_group, active_node_mask)
+            # Temperatures are stored relative to the file's TAbs.
+            t_abs = float(analysis_group.attrs.get("TAbs", _KELVIN_OFFSET))
+            self._add_tmd_nodes(
+                active_node_numbers,
+                active_node_types,
+                active_node_real_data,
+                _tmd_node_columns(analysis_group),
+                t_abs,
+            )
+            self._add_tmd_couplings(
+                analysis_group, data_group, active_node_mask, "GL", self._tmm.conductive_couplings
+            )
+            self._add_tmd_couplings(
+                analysis_group, data_group, active_node_mask, "GR", self._tmm.radiative_couplings
+            )
 
     def _add_tmd_nodes(
         self,
         node_numbers: np.ndarray,
         node_types: np.ndarray,
         node_real_data: np.ndarray,
+        columns: dict[str, int],
+        t_abs: float,
     ) -> None:
         for node_number, node_type, node_values in zip(
             node_numbers,
@@ -263,81 +311,42 @@ class ESATANReader:
             if node_type == "B":
                 node.type = pcc.NodeType.BOUNDARY
 
-            for attribute_name, attribute_index in _NODE_ATTRIBUTE_INDICES.items():
+            for attribute_name, attribute_index in columns.items():
                 value = float(node_values[attribute_index])
                 if attribute_name == "T":
-                    value += _KELVIN_OFFSET
+                    value += t_abs
                 setattr(node, attribute_name, value)
 
             self._tmm.add_node(node)
 
-    def _add_tmd_conductive_couplings(
+    def _add_tmd_couplings(
         self,
         analysis_group: Any,
         data_group: Any,
         active_node_mask: np.ndarray,
+        kind: str,
+        couplings: Any,
     ) -> None:
+        """Add the ``kind`` ("GL" / "GR") conductors of the file to ``couplings``."""
+        # A model without conductors of this kind has no such datasets.
+        if f"conductors{kind}" not in analysis_group or f"conductorData{kind}" not in data_group:
+            return
         node_numbers = np.asarray(analysis_group["thermalNodes"])[:, 0]
-        pair_indices = np.asarray(analysis_group["conductorsGL"])[:, :2] - 1
-        values = np.asarray(data_group["conductorDataGL"])[0, :, 0]
+        pair_indices = np.asarray(analysis_group[f"conductors{kind}"])[:, :2] - 1
+        values = np.asarray(data_group[f"conductorData{kind}"])[0, :, 0]
 
         valid_pair_mask = (
             active_node_mask[pair_indices[:, 0]] & active_node_mask[pair_indices[:, 1]]
         )
-        for (idx_1, idx_2), value in zip(
-            pair_indices[valid_pair_mask],
-            values[valid_pair_mask],
-            strict=True,
-        ):
-            self._add_sum_conductive_coupling(
-                int(node_numbers[idx_1]),
-                int(node_numbers[idx_2]),
-                float(value),
-            )
-
-    def _add_tmd_radiative_couplings(
-        self,
-        analysis_group: Any,
-        data_group: Any,
-        active_node_mask: np.ndarray,
-    ) -> None:
-        node_numbers = np.asarray(analysis_group["thermalNodes"])[:, 0]
-        pair_indices = np.asarray(analysis_group["conductorsGR"])[:, :2] - 1
-        values = np.asarray(data_group["conductorDataGR"])[0, :, 0]
-
-        valid_pair_mask = (
-            active_node_mask[pair_indices[:, 0]] & active_node_mask[pair_indices[:, 1]]
+        pairs = pair_indices[valid_pair_mask]
+        # ESATAN allows several conductors between the same two nodes (one row
+        # each, with a sequence number in the third column) and adds them.
+        couplings.add_couplings(
+            np.ascontiguousarray(node_numbers[pairs[:, 0]], dtype=np.int64),
+            np.ascontiguousarray(node_numbers[pairs[:, 1]], dtype=np.int64),
+            np.ascontiguousarray(values[valid_pair_mask], dtype=np.float64),
+            pcc.tmm.CouplingMerge.SUM,
         )
-        for (idx_1, idx_2), value in zip(
-            pair_indices[valid_pair_mask],
-            values[valid_pair_mask],
-            strict=True,
-        ):
-            self._tmm.radiative_couplings.add_coupling(
-                int(node_numbers[idx_1]),
-                int(node_numbers[idx_2]),
-                float(value),
-            )
-
-    def _add_sum_conductive_coupling(
-        self,
-        node_1: int,
-        node_2: int,
-        value: float,
-    ) -> None:
-        couplings = self._tmm.conductive_couplings
-        add_sum_coupling = getattr(couplings, "add_sum_coupling", None)
-        if callable(add_sum_coupling):
-            add_sum_coupling(node_1, node_2, value)
-            return
-
-        try:
-            current_value = float(couplings.get_coupling_value(node_1, node_2))
-        except Exception:
-            couplings.add_coupling(node_1, node_2, value)
-            return
-
-        couplings.set_coupling_value(node_1, node_2, current_value + value)
 
     # ------------------------------------------------------------- .d driver
 
