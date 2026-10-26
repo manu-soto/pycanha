@@ -590,20 +590,22 @@ class _Builder:
     def _check_optical_consistency(self, name: str, row: Mapping[str, float], line: int) -> None:
         """Warn when a file's diffuse reflectivities contradict the other values.
 
-        Diffuse reflectivity is derivable (``1 - emissivity - transmissivity``)
-        and is therefore not stored; a row where the stated value disagrees is
-        internally inconsistent and the source is worth telling about.
+        Diffuse reflectivity is derivable (``1 - emissivity - transmissivity -
+        specular reflectivity``) and is therefore not stored; a row where the
+        stated value disagrees is internally inconsistent and the source is
+        worth telling about.
         """
-        for band, emiss, transm, refl in (
-            ("IR", "ir_emiss", "ir_transm", "ir_refl"),
-            ("solar", "solar_absorb", "solar_transm", "solar_refl"),
+        for band, emiss, transm, refl, spec in (
+            ("IR", "ir_emiss", "ir_transm", "ir_refl", "ir_spec_refl"),
+            ("solar", "solar_absorb", "solar_transm", "solar_refl", "solar_spec_refl"),
         ):
-            expected = 1.0 - row[emiss] - row[transm]
+            expected = 1.0 - row[emiss] - row[transm] - row[spec]
             if abs(expected - row[refl]) > 1e-6:
                 self.diagnostics.warning(
                     "ERG_OPTICAL_INCONSISTENT",
-                    f"optical '{name}': {band} reflectivity {row[refl]} does not match "
-                    f"1 - {row[emiss]} - {row[transm]} = {expected:.6g}; it is dropped",
+                    f"optical '{name}': {band} diffuse reflectivity {row[refl]} does not match "
+                    f"1 - {row[emiss]} - {row[transm]} - {row[spec]} = {expected:.6g}; "
+                    f"{expected:.6g} is used",
                     line=line,
                 )
 

@@ -755,6 +755,30 @@ def test_inconsistent_optical_row_is_reported(tmp_path: Path) -> None:
     assert "ERG_OPTICAL_INCONSISTENT" in diagnostics.codes()
 
 
+def test_specular_optical_rows_are_consistent(tmp_path: Path) -> None:
+    # emissivity + diffuse + transmissivity + specular = 1 in each band.
+    model, diagnostics = build(
+        tmp_path,
+        "OPTICAL Mirror;\nMirror = [0.05, 0.0, 0.0, 0.1, 0.0, 0.0, 0.95, 0.9];\n"
+        "OPTICAL Window;\nWindow = [0.8, 0.0, 0.0, 0.1, 0.1, 0.5, 0.2, 0.3];\n"
+        "GEOMETRY M;\n"
+        "M = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0, opt1 = Mirror, opt2 = Window);",
+    )
+    assert "ERG_OPTICAL_INCONSISTENT" not in diagnostics.codes()
+    mesh = model.get_item("M").thermal_mesh
+    assert mesh.side1_optical.th_optical_properties == pytest.approx(
+        [0.05, 0.95, 0.0, 0.1, 0.9, 0.0]
+    )
+    assert mesh.side2_optical.th_optical_properties == pytest.approx([0.8, 0.2, 0.0, 0.1, 0.3, 0.5])
+
+
+def test_specular_optical_row_inconsistent_with_its_specular_part(tmp_path: Path) -> None:
+    _, diagnostics = build(
+        tmp_path, "OPTICAL Bad;\nBad = [0.05, 0.5, 0.0, 0.1, 0.0, 0.0, 0.95, 0.9];"
+    )
+    assert "ERG_OPTICAL_INCONSISTENT" in diagnostics.codes()
+
+
 def test_property_environment_rows_are_dropped(tmp_path: Path) -> None:
     _, diagnostics = build(
         tmp_path,
