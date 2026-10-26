@@ -73,6 +73,13 @@ _MODEL_RE = re.compile(r"\$MODEL\s+([A-Za-z_][A-Za-z0-9_]*)([^\n]*)")
 _ENDMODEL_RE = re.compile(r"\$ENDMODEL\b[^\n]*")
 _TYPE_HEADER_RE = re.compile(r"^\s*\$(REAL|INTEGER|CHARACTER|TABLE|CONTROL)\b", re.MULTILINE)
 _DEFINITION_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?);", re.DOTALL)
+# A $CONSTANTS definition, with its optional own type (``CHARACTER*NAME = 'x';``,
+# ESATAN User Manual, $CONSTANTS); a ';' inside a character string is kept.
+_CONSTANT_DEF_RE = re.compile(
+    r"(?:\b(REAL|INTEGER|CHARACTER)\s*\*\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"((?:'(?:[^']|'')*'|[^;'])+?)\s*;",
+    re.DOTALL | re.IGNORECASE,
+)
 _NODE_HEAD_RE = re.compile(r"\b([DBX])\s*(\d+)\s*(?:=\s*'([^']*)'\s*)?", re.IGNORECASE)
 _GL_RE = re.compile(r"\bGL\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(.+)", re.DOTALL)
 _GR_RE = re.compile(r"\bGR\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(.+)", re.DOTALL)
@@ -466,17 +473,29 @@ class ESATANReader:
         substitutions = self._effective_subs(subs)
         text = _apply_substitutions(text, substitutions)
 
-        # Walk type sections; default to REAL.
+        # Walk type sections; default to REAL. A definition's own type
+        # (``INTEGER*N = 9;``) overrides its section's.
         sections = self._split_by_type_header(text)
         params = self._tmm.parameters
         for type_name, section_text in sections:
-            for match in _DEFINITION_RE.finditer(section_text):
-                name = match.group(1)
-                expr = match.group(2).strip()
+            for match in _CONSTANT_DEF_RE.finditer(section_text):
+                kind = (match.group(1) or type_name).upper()
+                name = match.group(2)
+                expr = match.group(3).strip()
+                if kind == "CHARACTER":
+                    # Character constants are literal strings only.
+                    string = _character_literal(expr)
+                    if string is None:
+                        log.warning(
+                            f"$CONSTANTS '{name}': {expr!r} is not a character literal; skipping"
+                        )
+                        continue
+                    params.add_parameter(name, string)
+                    continue
                 value = self._safe_constant_value(name, expr)
                 if value is None:
                     continue
-                if type_name == "INTEGER":
+                if kind == "INTEGER":
                     params.add_parameter(name, int(value))
                 else:
                     params.add_parameter(name, float(value))
@@ -656,6 +675,8 @@ class ESATANReader:
             return {}
         out: dict[str, float] = {}
         for key, value in data.items():
+            if isinstance(value, str):  # $CHARACTER constants
+                continue
             try:
                 out[key] = float(value)
             except (TypeError, ValueError):
@@ -889,6 +910,14 @@ class ESATANReader:
 
 
 # ---------------------------------------------------------- module helpers
+
+
+def _character_literal(expr: str) -> str | None:
+    """``'text'`` -> ``text`` (a doubled quote is one quote); otherwise ``None``."""
+    expr = expr.strip()
+    if len(expr) >= 2 and expr[0] == expr[-1] == "'":
+        return expr[1:-1].replace("''", "'")
+    return None
 
 
 def _apply_substitutions(text: str, subs: dict[str, str]) -> str:
