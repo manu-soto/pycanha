@@ -678,7 +678,47 @@ def test_meshed_box_cells_are_numbered_in_esatan_order(tmp_path: Path) -> None:
         assert centres[node] == pytest.approx(point, abs=1e-3), node
 
 
-# -- transformations -------------------------------------------------------
+_UNIT_BOX = (
+    _BOX_SHELL + "GEOMETRY A;\nA = SHELL_BOX(point1 = [0.0, 0.0, 0.0], point2 = [1.0, 0.0, 0.0], "
+    "point3 = [0.0, 1.0, 0.0], point4 = [0.0, 0.0, 1.0], "
+    f"nbase1 = 1, nbase2 = 101, {_BOX_ATTRS});\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("face", "gone"),
+    [
+        # faceN is face pair (N - 1) // 2, counted over the box's faces in
+        # ESATAN's order: w = 1, v = 0, u = 1, v = 1, u = 0, w = 0.
+        ("A:face1", (0.5, 0.5, 1.0)),
+        ("A:face2", (0.5, 0.5, 1.0)),
+        ("A:face3", (0.5, 0.0, 0.5)),
+        ("A:face12", (0.5, 0.5, 0.0)),
+    ],
+)
+def test_remove_face_takes_a_box_face_out(
+    tmp_path: Path, face: str, gone: tuple[float, float, float]
+) -> None:
+    model, diagnostics = build(tmp_path, _UNIT_BOX + f'REMOVE_FACE(face = "{face}");')
+    assert len(model.get_group("A").children) == 5
+    centres = list(_node_centres(model).values())
+    assert len(centres) == 10
+    assert not any(np.allclose(centre, gone, atol=1e-6) for centre in centres)
+    assert "ERG_FACE_REMOVED" in diagnostics.codes()
+    assert "ERG_FACE_EDIT" not in diagnostics.codes()
+
+
+def test_remove_face_of_an_unmeshed_shell(tmp_path: Path) -> None:
+    model, diagnostics = build(
+        tmp_path,
+        "GEOMETRY P;\nP = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0, nbase1 = 1);\n"
+        "GEOMETRY Q;\nQ = SHELL_SCS_RECTANGLE(xmax = 2.0, ymax = 2.0, nbase1 = 2);\n"
+        "GEOMETRY M;\nM = P + Q;\n"
+        'REMOVE_FACE(face = "P:face1");',
+    )
+    items = {g.name for g in model.children_recursive() if isinstance(g, GeometryItem)}
+    assert items == {"Q"}
+    assert "ERG_FACE_EDIT" not in diagnostics.codes()
 
 
 def test_rotation_then_translation_places_the_object(tmp_path: Path) -> None:
