@@ -864,6 +864,54 @@ def test_comment_terminators_inside_comments_and_strings_are_kept() -> None:
     assert lines == [2]
 
 
+def _plates(*names: str) -> str:
+    return "".join(
+        f"GEOMETRY {n};\n{n} = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0);\n" for n in names
+    )
+
+
+def _built_items(model: GeometryModel) -> set[str]:
+    return {g.name for g in model.children_recursive() if isinstance(g, GeometryItem)}
+
+
+def test_delete_geometry(tmp_path: Path) -> None:
+    # ESATAN-TMS 2026 builds nodes for P1, P3, P7 and P9 only: P2 leaves with its
+    # definition, H's parts move out of the model geometry (recursive = FALSE),
+    # and P8 keeps its name but loses its definition (unassign = TRUE).
+    model, diagnostics = build(
+        tmp_path,
+        _plates("P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9")
+        + "GEOMETRY G;\nG = P1 + P2 + P3;\nGEOMETRY H;\nH = P4 + P5 + P6;\n"
+        "GEOMETRY J;\nJ = P7 + P8 + P9;\nGEOMETRY M;\nM = G + H + J;\n"
+        "DELETE_GEOMETRY(geometry = P2);\n"
+        "DELETE_GEOMETRY(geometry = H, recursive = FALSE);\n"
+        "DELETE_GEOMETRY(geometry = P8, unassign = TRUE);",
+    )
+    assert _built_items(model) == {"P1", "P3", "P7", "P9"}
+    assert "ERG_UNHANDLED_STATEMENT" not in diagnostics.codes()
+
+
+def test_released_parts_can_be_used_again(tmp_path: Path) -> None:
+    model, diagnostics = build(
+        tmp_path,
+        _plates("P4", "P5", "P6") + "GEOMETRY H;\nH = P4 + P5 + P6;\n"
+        "DELETE_GEOMETRY(geometry = H, recursive = FALSE);\n"
+        "GEOMETRY K;\nK = P4 + P5;\nGEOMETRY M;\nM = K;",
+    )
+    assert _built_items(model) == {"P4", "P5"}
+    assert "ERG_REUSED_GEOMETRY" not in diagnostics.codes()
+
+
+def test_delete_shell_and_a_missing_target(tmp_path: Path) -> None:
+    model, diagnostics = build(
+        tmp_path,
+        _plates("P1", "P2") + "GEOMETRY M;\nM = P1 + P2;\nDELETE_SHELL(shell = P1);\n"
+        "DELETE_GEOMETRY(geometry = NOWHERE);",
+    )
+    assert _built_items(model) == {"P2"}
+    assert "ERG_DELETE_TARGET" in diagnostics.codes()
+
+
 def test_the_reader_package_can_be_imported_first() -> None:
     """Importing the reader before pycanha.gmm must not deadlock the imports.
 

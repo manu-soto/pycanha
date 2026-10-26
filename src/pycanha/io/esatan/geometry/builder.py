@@ -158,6 +158,11 @@ class _Builder:
         """Prisms still read as geometry, as (line, wall count, is meshed)."""
         self._skipped: dict[str, str] = {}
         """Names deliberately not built, and the construct that each one was."""
+        self._released: set[str] = set()
+        """Parts DELETE_GEOMETRY moved out of the hierarchy: free to be used
+        again, but outside the model geometry until they are."""
+        self._deleted: list[GeometryItem | GeometryGroup | GeometryGroupCutted] = []
+        """Geometries DELETE_GEOMETRY took out, kept alive but never attached."""
 
     # -- entry point -------------------------------------------------------
 
@@ -236,7 +241,9 @@ class _Builder:
         is an error in the core, and the file that produced it is perfectly
         legal, so the second name is skipped rather than allowed to raise.
         """
-        roots = [name for name in self._order if name not in self.consumed]
+        roots = [
+            name for name in self._order if name not in self.consumed and name not in self._released
+        ]
         attached: set[int] = set()
         for name in roots:
             geometry = self.geometries[name]
@@ -405,6 +412,8 @@ class _Builder:
             self._override(call)
         elif function in _TRANSFORMS:
             self._apply_transform(function, call, statement.line)
+        elif function in ("DELETE_GEOMETRY", "DELETE_SHELL"):
+            self._delete_geometry(call)
         elif function in GEOMETRY_ALTERING_PROCEDURES:
             self.diagnostics.error(
                 "ERG_FACE_EDIT",
@@ -413,6 +422,44 @@ class _Builder:
             )
         else:
             self.unhandled.append(statement)
+
+    def _delete_geometry(self, call: ast.Call) -> None:
+        """``DELETE_GEOMETRY(geometry = X [, recursive = L] [, unassign = L])``.
+
+        ESATAN takes X out of the model hierarchy. By default its constituent
+        parts go with it; with ``recursive = FALSE`` they move to the top of the
+        hierarchy, outside the model geometry, where they can be used again;
+        with ``unassign = TRUE`` X keeps its name but loses its definition.
+        Either way nothing X held gets a node. ``DELETE_SHELL`` is the older
+        spelling, with ``shell =``.
+        """
+        expr = call.args.get("geometry", call.args.get("shell"))
+        if not isinstance(expr, ast.Ref) or expr.name not in self.geometries:
+            self.diagnostics.warning(
+                "ERG_DELETE_TARGET",
+                f"{call.name} names no geometry that exists",
+                line=call.line,
+            )
+            return
+        args = self._arguments(call)
+        recursive = bool(args.raw("recursive")) if "recursive" in args else True
+        name = expr.name
+        geometry = self.geometries.pop(name)
+        if name in self._order:
+            self._order.remove(name)
+        self.consumed.discard(name)
+        self._released.discard(name)
+        self._deleted.append(geometry)
+        for known in self.geometries.values():
+            if isinstance(known, GeometryGroup) and known.remove_child(geometry):
+                break
+        if not recursive and isinstance(geometry, GeometryGroup):
+            for child in list(geometry.children):
+                geometry.remove_child(child)
+                for known_name, known in self.geometries.items():
+                    if known is child:
+                        self.consumed.discard(known_name)
+                        self._released.add(known_name)
 
     # -- values and materials ----------------------------------------------
 
