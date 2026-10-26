@@ -859,6 +859,36 @@ def test_a_member_assigned_again_is_replaced_in_its_group(tmp_path: Path) -> Non
     members = {child.name: child for child in model.get_group("G").children}
     assert members["P1"].primitive.surface_area() == pytest.approx(0.8)
 
+
+def test_renamed_objects_are_moved_by_their_new_name(tmp_path: Path) -> None:
+    # ESATAN-TMS 2026 puts nodes 1001, 2001 and 3001 where asserted below, on
+    # items labelled PANEL_A, P2 and PANEL_C.
+    def plate(name: str, x0: float, nbase: int) -> str:
+        return (
+            f"GEOMETRY {name};\n{name} = SHELL_RECTANGLE(point1 = [{x0}, 0.0, 0.0], "
+            f"point2 = [{x0 + 0.5}, 0.0, 0.0], point4 = [{x0}, 0.5, 0.0], nbase1 = {nbase});\n"
+        )
+
+    (tmp_path / "part.gmm").write_text(
+        plate("P1", 0.0, 1001) + plate("P2", 2.0, 2001) + "GEOMETRY GP;\nGP = P1 + P2;\n",
+        encoding="utf-8",
+    )
+    model, diagnostics = build(
+        tmp_path,
+        'INCLUDE "part.gmm"\n'
+        'RENAME(old_name = "P1", new_name = "PANEL_A");\n'
+        'RENAME(old_name = "GP", new_name = "GROUP_B");\n'
+        "PANEL_A = TRANSLATE(object_name = PANEL_A, x_dist = 0.25);\n"
+        "GROUP_B = ROTATE(object_name = GROUP_B, x_ang = 90.0);\n"
+        "GROUP_B = TRANSLATE(object_name = GROUP_B, z_dist = 1.0);\n"
+        + plate("P3", 4.0, 3001)
+        + 'RENAME(old_name = "P3", new_name = "PANEL_C");\n'
+        "GEOMETRY M;\nM = GROUP_B + PANEL_C;",
+    )
+    items = {g.name for g in model.children_recursive() if isinstance(g, GeometryItem)}
+    assert items == {"PANEL_A", "P2", "PANEL_C"}
+    assert "ERG_TRANSFORM_TARGET" not in diagnostics.codes()
+
     mesh = model.mesh
     vertices = np.asarray(mesh.vertices, dtype=float)
     numbers = np.asarray(mesh.node_numbers)
@@ -883,6 +913,19 @@ def test_a_shell_assigned_again_before_joining_a_group(tmp_path: Path) -> None:
     members = {child.name: child for child in model.get_group("G").children}
     assert members["P1"].primitive.surface_area() == pytest.approx(0.8)
     assert "ERG_MEMBER_REDEFINED" not in diagnostics.codes()
+
+    triangles = np.asarray(mesh.triangles)
+    for node, expected in {
+        1001: (0.5, 0.0, 1.25),
+        2001: (2.25, 0.0, 1.25),
+        3001: (4.25, 0.25, 0.0),
+    }.items():
+        corners = [
+            vertices[tri]
+            for tri, face in zip(triangles, face_ids, strict=True)
+            if numbers[face - face % 2] == node
+        ]
+        assert np.mean(np.concatenate(corners), axis=0) == pytest.approx(expected, abs=1e-6), node
 
 
 def test_rotations_are_applied_x_then_y_then_z_about_fixed_axes(tmp_path: Path) -> None:
