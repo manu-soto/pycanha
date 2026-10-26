@@ -99,3 +99,30 @@ def test_per_block_methods_accept_strings() -> None:
     tm.tmm.add_node(n2)
     reader.parse_conductors("GL(1,2) = 7.0;\n", subs={})
     assert tm.tmm.conductive_couplings.get_coupling_value(1, 2) == 7.0
+
+
+def test_hash_in_label_and_commented_out_include(tmp_path: Path) -> None:
+    # A '#' inside a label is data; a commented-out $INCLUDE is not read
+    # (the file does not exist).
+    deck = tmp_path / "hash.d"
+    deck.write_text(
+        "$MODEL HASH\n"
+        "  $NODES\n"
+        "    D5 = 'PANEL#5', T = 25.0, C = 7.0, A = 0.1;\n"
+        "    D6 = 'PANEL6', T = 30.0, C = 12.0, A = 0.2;\n"
+        "  $CONDUCTORS\n"
+        "    GL(5, 6) = 0.5;\n"
+        '    #$INCLUDE "missing.CONDUCTORS"\n'
+        "  $EXECUTION\n"
+        "      CALL SOLVFM\n"
+        "$ENDMODEL HASH\n",
+        encoding="utf-8",
+    )
+    tm = pc.ThermalModel("hash")
+    ESATANReader(tm).parse_analysis_file(deck)
+
+    nodes = tm.tmm.nodes
+    assert nodes.get_C(5) == pytest.approx(7.0)
+    assert nodes.get_a(5) == pytest.approx(0.1)
+    assert nodes.get_C(6) == pytest.approx(12.0)
+    assert tm.tmm.conductive_couplings.get_coupling_value(5, 6) == pytest.approx(0.5)
