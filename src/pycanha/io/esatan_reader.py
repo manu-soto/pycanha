@@ -108,6 +108,25 @@ _ENDMODEL_RE = re.compile(r"\$ENDMODEL\b[^\n]*")
 _TYPE_HEADER_RE = re.compile(r"^\s*\$(REAL|INTEGER|CHARACTER|TABLE|CONTROL)\b", re.MULTILINE)
 _DEFINITION_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?);", re.DOTALL)
 _NODE_HEAD_RE = re.compile(r"\b([DBX])\s*(\d+)\s*(?:=\s*'([^']*)'\s*)?", re.IGNORECASE)
+# The order of the node entities given by position (ESATAN User Manual, $NODES).
+_POSITIONAL_NODE_ATTRS: Final[tuple[str, ...]] = (
+    "T",
+    "C",
+    "QA",
+    "QE",
+    "QI",
+    "QS",
+    "QR",
+    "A",
+    "ALP",
+    "EPS",
+    "QAI",
+    "QEI",
+    "QSI",
+    "FX",
+    "FY",
+    "FZ",
+)
 _GL_RE = re.compile(r"\bGL\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(.+)", re.DOTALL)
 _GR_RE = re.compile(r"\bGR\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(.+)", re.DOTALL)
 _OTHER_COND_RE = re.compile(r"\b(GL|GR|GF|GV|GP|M)\s*\([^)]*\)\s*=", re.IGNORECASE)
@@ -728,15 +747,8 @@ class ESATANReader:
         if prefix == "B":
             node.type = pcc.NodeType.BOUNDARY
 
-        attribute_assignments = _split_top_level(rest, ",")
-        for raw_assignment in attribute_assignments:
-            if "=" not in raw_assignment:
-                continue
-            attr_text, expr = raw_assignment.split("=", 1)
-            attr_name = attr_text.strip().upper()
-            expr = expr.strip()
+        for attr_name, expr in _node_entity_assignments(node_num, rest):
             if attr_name not in ESATAN_NODE_ATTRS:
-                # Drop label form (anything before the comma is consumed by head_match).
                 continue
             python_attr = ESATAN_NODE_ATTRS[attr_name]
             value = self._resolve_node_attribute_value(node_num, attr_name, expr)
@@ -951,6 +963,30 @@ class ESATANReader:
 def _without_strings(text: str) -> str:
     """``text`` with the content of its quoted strings removed."""
     return re.sub(r"'[^']*'|\"[^\"]*\"", "''", text)
+
+
+def _node_entity_assignments(node_num: int, rest: str) -> list[tuple[str, str]]:
+    """``(ENTITY, expression)`` pairs of a node definition after its head.
+
+    Entities may be given by position, in ESATAN's order, until the first
+    one given by name; the rest must be given by name (ESATAN User Manual,
+    ``$NODES``): ``D4, 15.0, 3.0;`` is T = 15.0, C = 3.0.
+    """
+    assignments: list[tuple[str, str]] = []
+    by_name = False
+    for position, raw_assignment in enumerate(_split_top_level(rest, ",")):
+        if "=" in raw_assignment:
+            by_name = True
+            attr_text, expr = raw_assignment.split("=", 1)
+            assignments.append((attr_text.strip().upper(), expr.strip()))
+        elif not by_name and position < len(_POSITIONAL_NODE_ATTRS):
+            assignments.append((_POSITIONAL_NODE_ATTRS[position], raw_assignment.strip()))
+        else:
+            log.warning(
+                f"$NODES: value {raw_assignment.strip()!r} after an entity given by name "
+                f"in the definition of node {node_num}; ignored"
+            )
+    return assignments
 
 
 def _apply_substitutions(text: str, subs: dict[str, str]) -> str:
