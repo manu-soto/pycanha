@@ -28,6 +28,7 @@ from pycanha.gmm import (
 from pycanha.gmm.mesh import ops as mesh_ops
 from pycanha.io.esatan.errors import EsatanParseError
 from pycanha.io.esatan.geometry import cuts_to_esatan_mesh, esatan_mesh_to_cuts
+from pycanha.io.esatan.lang.parser import _blank_stray_comment_ends
 
 DISC_ERG = Path(__file__).resolve().parents[2] / "data" / "esatan" / "DISC" / "DISC.erg"
 
@@ -800,6 +801,43 @@ def test_reading_into_a_thermal_model_populates_its_geometry(tmp_path: Path) -> 
     thermal_model = ThermalModel("M")
     thermal_model.gmm.io.read_esatan_erg(path)
     assert isinstance(thermal_model.gmm.get_item("R"), GeometryItem)
+
+
+def test_a_stray_comment_terminator_is_reported_and_skipped(tmp_path: Path) -> None:
+    # ESATAN reports a '*/' that closes no comment as a syntax error and reads on.
+    model, diagnostics = build(
+        tmp_path,
+        "GEOMETRY P;\nP = SHELL_SCS_DISC(rmax = 1.0);\n/* a note */ */\n"
+        "GEOMETRY Q;\nQ = SHELL_SCS_DISC(rmax = 2.0);",
+    )
+    assert isinstance(model.get_item("P"), GeometryItem)
+    assert isinstance(model.get_item("Q"), GeometryItem)
+    stray = [d for d in diagnostics if d.code == "ERG_STRAY_COMMENT_END"]
+    assert [d.line for d in stray] == [4]
+
+
+def test_a_stray_comment_terminator_in_an_included_file(tmp_path: Path) -> None:
+    (tmp_path / "part.erg").write_text(
+        "/* a note */ */\nGEOMETRY Q;\nQ = SHELL_SCS_DISC(rmax = 2.0);\n", encoding="utf-8"
+    )
+    model, diagnostics = build(
+        tmp_path, 'INCLUDE "part.erg"\nGEOMETRY P;\nP = SHELL_SCS_DISC(rmax = 1.0);'
+    )
+    assert isinstance(model.get_item("P"), GeometryItem)
+    assert isinstance(model.get_item("Q"), GeometryItem)
+    assert diagnostics.counts().get("ERG_STRAY_COMMENT_END") == 1
+
+
+def test_a_stray_comment_terminator_raises_when_strict(tmp_path: Path) -> None:
+    with pytest.raises(EsatanParseError, match="closes no comment"):
+        build(tmp_path, "GEOMETRY P;\nP = SHELL_SCS_DISC(rmax = 1.0); */", strict=True)
+
+
+def test_comment_terminators_inside_comments_and_strings_are_kept() -> None:
+    text = 'A /* x */ B "a*/b" /* c\n*/ D */ E'
+    blanked, lines = _blank_stray_comment_ends(text)
+    assert blanked == 'A /* x */ B "a*/b" /* c\n*/ D    E'
+    assert lines == [2]
 
 
 def test_the_reader_package_can_be_imported_first() -> None:
