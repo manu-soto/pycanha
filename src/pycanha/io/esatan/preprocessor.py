@@ -54,6 +54,36 @@ def sanitise_d_notation(text: str) -> str:
     return _FORTRAN_D_NUMBER_RE.sub(r"\1e\2", text)
 
 
+def comment_start(line: str) -> int:
+    """Index of the ``#`` that starts an ESATAN comment on ``line``, or -1.
+
+    A ``#`` inside a character string is data, not a comment: node labels
+    (``'PLATE#1'``), node lists (``'#1-100'``) and ``$INCLUDE`` paths.
+    """
+    quote = ""
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#":
+            return i
+    return -1
+
+
+def is_fortran_comment_line(line: str) -> bool:
+    """A Fortran column-1 comment: C / c / * / ! then whitespace or end of line.
+
+    ``C`` alone, ``C this is a comment`` and ``* foo`` are comments;
+    ``Cp(2,2)``, ``CALL`` and ``CONSTANTS`` are not.
+    """
+    if line[:1] not in ("C", "c", "*", "!"):
+        return False
+    tail = line[1:2]
+    return tail == "" or tail.isspace()
+
+
 def strip_data_comments(text: str) -> str:
     """Strip ESATAN ``#`` end-of-line comments and Fortran column-1 ``C``.
 
@@ -62,17 +92,10 @@ def strip_data_comments(text: str) -> str:
     """
     lines: list[str] = []
     for raw in text.splitlines():
-        # Fortran column-1 comment marker: a line is a comment if it starts
-        # with C/c/*/! and the next character is whitespace or end-of-line
-        # (so ``C`` alone, ``C this is a comment`` and ``* foo`` are stripped
-        # but ``Cp(2,2)``, ``CALL`` and ``CONSTANTS`` are kept).
-        if raw[:1] in ("C", "c", "*", "!"):
-            tail = raw[1:2]
-            if tail == "" or tail.isspace():
-                continue
-        # ESATAN end-of-line comment.  Quoted node labels never contain '#',
-        # so a plain split is safe in practice for data blocks.
-        idx = raw.find("#")
+        if is_fortran_comment_line(raw):
+            continue
+        # ESATAN end-of-line comment; a '#' inside a string is kept.
+        idx = comment_start(raw)
         line = raw[:idx] if idx != -1 else raw
         lines.append(line)
     return "\n".join(lines)
@@ -111,4 +134,14 @@ def expand_includes(
             candidate = base_dir / candidate
         return expand_includes(candidate, _stack=new_stack)
 
-    return _INCLUDE_RE.sub(_replace, text)
+    # Only an $INCLUDE in the code part of a line is expanded: one after a
+    # '#' or on a column-1 comment line is commented out, as ESATAN reads it.
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if "$INCLUDE" not in line.upper() or is_fortran_comment_line(line):
+            out.append(line)
+            continue
+        cut = comment_start(line)
+        code, comment = (line, "") if cut == -1 else (line[:cut], line[cut:])
+        out.append(_INCLUDE_RE.sub(_replace, code) + comment)
+    return "".join(out)

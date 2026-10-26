@@ -71,6 +71,14 @@ class TestStripDataComments:
         assert "Fortran comment" not in out
         assert "D1 = 5;" in out
 
+    def test_hash_inside_string_is_data(self) -> None:
+        # Node labels, node lists ('#1-100') and paths can contain '#'.
+        text = "D5 = 'PANEL#5', T = 25.0;  # a note\nNGROUP = \"#2\";\n"
+        out = strip_data_comments(text)
+        assert "D5 = 'PANEL#5', T = 25.0;" in out
+        assert "a note" not in out
+        assert 'NGROUP = "#2";' in out
+
 
 class TestExpandIncludes:
     def test_inlines_relative_includes(self, tmp_path: Path) -> None:
@@ -119,3 +127,38 @@ class TestExpandIncludes:
 
         with pytest.raises(EsatanParseError, match="cycle"):
             expand_includes(main)
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '#$INCLUDE "missing.dat"',
+            '    # $INCLUDE "missing.dat"',
+            'C     $INCLUDE "missing.dat"',
+            'GL(1, 2) = 1.0;  # $INCLUDE "missing.dat"',
+        ],
+    )
+    def test_commented_out_include_is_not_read(self, tmp_path: Path, line: str) -> None:
+        main = tmp_path / "main.d"
+        main.write_text(f"$CONDUCTORS\n{line}\n", encoding="utf-8")
+
+        out = expand_includes(main)
+        assert line in out
+
+    def test_commented_out_include_of_existing_file(self, tmp_path: Path) -> None:
+        # Inlined, the file would be commented out on its first line only.
+        two = tmp_path / "two.dat"
+        two.write_text("GL(1, 9) = 100.0;\nGL(2, 4) = 100.0;\n", encoding="utf-8")
+        main = tmp_path / "main.d"
+        main.write_text('$CONDUCTORS\n    #$INCLUDE "two.dat"\n', encoding="utf-8")
+
+        out = expand_includes(main)
+        assert "GL(2, 4)" not in out
+
+    def test_include_path_with_hash(self, tmp_path: Path) -> None:
+        sub = tmp_path / "case#1.dat"
+        sub.write_text("k = 0.5;\n", encoding="utf-8")
+        main = tmp_path / "main.d"
+        main.write_text('$LOCALS\n  $INCLUDE "case#1.dat"  # case 1\n', encoding="utf-8")
+
+        out = expand_includes(main)
+        assert "k = 0.5" in out

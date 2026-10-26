@@ -31,13 +31,11 @@ from lark import Lark, Token, Tree
 from lark.exceptions import LarkError
 
 from .attributes import ESATAN_NODE_ATTRS
-from .preprocessor import sanitise_d_notation
+from .preprocessor import comment_start, is_fortran_comment_line, sanitise_d_notation
 
 # LHS of an entity assignment: an attribute prefix immediately followed by a
 # node number, e.g. ``QI1060``, ``T2000``, ``C27``.
 _ENTITY_LHS_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
-
-_FORTRAN_COMMENT_PREFIXES = ("C", "c", "*", "!")
 
 
 @lru_cache(maxsize=1)
@@ -89,25 +87,18 @@ def _join_parts(parts: list[str]) -> str:
 
 
 def _translate_logical_line(line: str) -> str:
-    if _is_fortran_comment(line):
+    if is_fortran_comment_line(line):
         return _comment(line[1:])
     stripped = line.strip()
     if not stripped:
         return ""
     if stripped.startswith("#"):
         return _comment(stripped[1:])
-    code = stripped.split("#", 1)[0].strip()  # drop inline ESATAN comment
+    cut = comment_start(stripped)  # drop inline ESATAN comment; a '#' in a string stays
+    code = (stripped if cut == -1 else stripped[:cut]).strip()
     if not code:
         return ""
     return _translate_statement(code)
-
-
-def _is_fortran_comment(line: str) -> bool:
-    """A Fortran column-1 comment: C / c / * / ! then whitespace or EOL."""
-    if line[:1] not in _FORTRAN_COMMENT_PREFIXES:
-        return False
-    tail = line[1:2]
-    return tail == "" or tail.isspace()
 
 
 def _translate_statement(code: str) -> str:

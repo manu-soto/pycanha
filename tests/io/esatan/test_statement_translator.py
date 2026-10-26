@@ -55,6 +55,12 @@ class TestComments:
     def test_hash_comment(self) -> None:
         assert _one("# already python") == "# already python"
 
+    def test_hash_inside_string_is_not_a_comment(self) -> None:
+        # ESATAN node lists are written '#1-100'.
+        assert _one("      CALL SETNDR('#4', 'QI', 2.0D0, CURRENT)  # heaters") == (
+            "# CALL SETNDR('#4', 'QI', 2.0D0, CURRENT)"
+        )
+
 
 class TestFallback:
     def test_do_loop_untranslated(self) -> None:
