@@ -171,6 +171,9 @@ class _Builder:
         """The faces of each decomposed box / prism, in ESATAN's order, as built
         (REMOVE_FACE counts face pairs over all of them, removed or not)."""
 
+        self._rebound: list[object] = []
+        """Group members replaced by a later definition of their name (kept alive)."""
+
     # -- entry point -------------------------------------------------------
 
     def run(self, parsed: ast.ModelFile) -> None:
@@ -888,7 +891,37 @@ class _Builder:
     ) -> None:
         if name not in self.geometries:
             self._order.append(name)
+        else:
+            self._rebind_member(name, self.geometries[name], geometry)
         self.geometries[name] = geometry
+
+    def _rebind_member(
+        self,
+        name: str,
+        old: GeometryItem | GeometryGroup | GeometryGroupCutted,
+        new: GeometryItem | GeometryGroup | GeometryGroupCutted,
+    ) -> None:
+        """A name assigned again after it joined a group: the group follows the name.
+
+        ESATAN's combinations hold their members by name, so ``G = P1 + P2;``
+        followed later by ``P1 = SHELL_...(...)`` makes G hold the new P1,
+        placed by G's own transformations.  The old object is swapped for the
+        new one in the group that holds it -- unless the new object contains
+        the old one (``C = C + D``), which is a new group, not a redefinition.
+        """
+        if old is new or any(node is old for node in _subtree(new)):
+            return
+        for known in self.geometries.values():
+            if isinstance(known, GeometryGroup) and any(child is old for child in known.children):
+                known.remove_child(old)
+                known.add(new)
+                self._rebound.append(old)
+                self.diagnostics.info(
+                    "ERG_MEMBER_REDEFINED",
+                    f"'{name}' is assigned again after it joined '{known.name}'; "
+                    f"'{known.name}' now holds the new definition, as in the source model",
+                )
+                return
 
     # -- attributes --------------------------------------------------------
 
@@ -1543,6 +1576,18 @@ def _items_of(
     for child in children:
         if isinstance(child, GeometryItem | GeometryGroup | GeometryGroupCutted):
             yield from _items_of(child)
+
+
+def _subtree(geometry: object) -> Iterable[object]:
+    """*geometry* and every group, cut and item under it."""
+    pending = [geometry]
+    while pending:
+        node = pending.pop()
+        yield node
+        if isinstance(node, GeometryGroupCutted):
+            pending.extend([*node.targets, *node.cutters])
+        elif isinstance(node, GeometryGroup):
+            pending.extend(node.children)
 
 
 def _numbers(value: object) -> list[float]:
