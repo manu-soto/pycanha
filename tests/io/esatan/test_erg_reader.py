@@ -859,6 +859,31 @@ def test_a_member_assigned_again_is_replaced_in_its_group(tmp_path: Path) -> Non
     members = {child.name: child for child in model.get_group("G").children}
     assert members["P1"].primitive.surface_area() == pytest.approx(0.8)
 
+    mesh = model.mesh
+    vertices = np.asarray(mesh.vertices, dtype=float)
+    numbers = np.asarray(mesh.node_numbers)
+    face_ids = np.asarray(mesh.face_ids, dtype=np.int64)
+    corners = [
+        vertices[tri]
+        for tri, face in zip(np.asarray(mesh.triangles), face_ids, strict=True)
+        if numbers[face - face % 2] == 1001
+    ]
+    assert np.mean(np.concatenate(corners), axis=0) == pytest.approx([0.5, 0.0, 1.4], abs=1e-6)
+    assert "ERG_MEMBER_REDEFINED" in diagnostics.codes()
+
+
+def test_a_shell_assigned_again_before_joining_a_group(tmp_path: Path) -> None:
+    model, diagnostics = build(
+        tmp_path,
+        _plate("P1", 0.0, 0.5, 0.5, 1)
+        + _plate("P1", 0.0, 1.0, 0.8, 1).replace("GEOMETRY P1;\n", "")
+        + _plate("P2", 2.0, 2.5, 0.5, 2)
+        + "GEOMETRY G;\nG = P1 + P2;",
+    )
+    members = {child.name: child for child in model.get_group("G").children}
+    assert members["P1"].primitive.surface_area() == pytest.approx(0.8)
+    assert "ERG_MEMBER_REDEFINED" not in diagnostics.codes()
+
 
 def test_renamed_objects_are_moved_by_their_new_name(tmp_path: Path) -> None:
     # ESATAN-TMS 2026 puts nodes 1001, 2001 and 3001 where asserted below, on
@@ -893,27 +918,6 @@ def test_renamed_objects_are_moved_by_their_new_name(tmp_path: Path) -> None:
     vertices = np.asarray(mesh.vertices, dtype=float)
     numbers = np.asarray(mesh.node_numbers)
     face_ids = np.asarray(mesh.face_ids, dtype=np.int64)
-    corners = [
-        vertices[tri]
-        for tri, face in zip(np.asarray(mesh.triangles), face_ids, strict=True)
-        if numbers[face - face % 2] == 1001
-    ]
-    assert np.mean(np.concatenate(corners), axis=0) == pytest.approx([0.5, 0.0, 1.4], abs=1e-6)
-    assert "ERG_MEMBER_REDEFINED" in diagnostics.codes()
-
-
-def test_a_shell_assigned_again_before_joining_a_group(tmp_path: Path) -> None:
-    model, diagnostics = build(
-        tmp_path,
-        _plate("P1", 0.0, 0.5, 0.5, 1)
-        + _plate("P1", 0.0, 1.0, 0.8, 1).replace("GEOMETRY P1;\n", "")
-        + _plate("P2", 2.0, 2.5, 0.5, 2)
-        + "GEOMETRY G;\nG = P1 + P2;",
-    )
-    members = {child.name: child for child in model.get_group("G").children}
-    assert members["P1"].primitive.surface_area() == pytest.approx(0.8)
-    assert "ERG_MEMBER_REDEFINED" not in diagnostics.codes()
-
     triangles = np.asarray(mesh.triangles)
     for node, expected in {
         1001: (0.5, 0.0, 1.25),
