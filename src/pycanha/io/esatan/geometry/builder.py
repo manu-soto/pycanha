@@ -166,39 +166,28 @@ class _Builder:
         for statement in parsed.statements:
             self._statement(statement)
         self._attach_roots(parsed.name)
-        for name, (line, meshed) in self._boxes.items():
+        for name, (line, _meshed) in self._boxes.items():
             # Reported here rather than where the box was built, because until
             # every statement has been seen it is not known whether the box was
             # geometry or a cutting tool -- and a cutter's faces never exist.
+            # The faces and their cells are numbered in ESATAN's order
+            # (box_faces), so no node-order warning is needed.
             self.diagnostics.info(
                 "ERG_BOX_DECOMPOSED",
                 f"'{name}' is a box; it becomes a group of six flat faces, one geometry each, "
                 "so a reference to the box as a single primitive will not resolve",
                 line=line,
             )
-            if meshed:
-                self.diagnostics.error(
-                    "ERG_BOX_NODE_ORDER",
-                    f"'{name}' is a meshed box: its faces are numbered in this reader's own "
-                    "face order, so per-face node numbers are a permutation of the source's",
-                    line=line,
-                )
-        for name, (line, walls, meshed) in self._prisms.items():
+        for name, (line, walls, _meshed) in self._prisms.items():
             # Deferred for the same reason as the box above: a prism used as a
-            # cutter is read as a closed solid, and never had these walls.
+            # cutter is read as a closed solid, and never had these walls.  The
+            # walls P1P2, P2P3, P3P1 with the height second are ESATAN's order.
             self.diagnostics.info(
                 "ERG_PRISM_DECOMPOSED",
                 f"'{name}' is a triangular prism; it becomes a group of {walls} side walls, "
                 "with no end caps -- the prism has none",
                 line=line,
             )
-            if meshed:
-                self.diagnostics.error(
-                    "ERG_BOX_NODE_ORDER",
-                    f"'{name}' is a meshed prism: its walls are numbered in this reader's own "
-                    "order, so per-face node numbers are a permutation of the source's",
-                    line=line,
-                )
         if self._unnumbered:
             # ESATAN would number these itself, continuing from the last
             # automatically numbered primitive.  Inventing numbers here would
@@ -760,9 +749,8 @@ class _Builder:
                 item.name, item, call, args, _BOTH_SIDES, line, directions=face.directions
             )
             # The faces of one solid share a node sequence in ESATAN; each face
-            # here continues where the previous one stopped, which keeps the
-            # numbers unique and the count right even though the order in which
-            # ESATAN visits the faces is not reproduced.
+            # here continues where the previous one stopped, in the order
+            # box_faces / prism_faces give them, which is ESATAN's.
             self._offset_nodes(item.thermal_mesh, offset)
             offset += item.thermal_mesh.num_face_pairs
             items.append(item)
@@ -826,7 +814,8 @@ class _Builder:
         reader supports: both run around the circumference of a surface of
         revolution and along the first edge of a planar one.
         """
-        for setter, source in zip(("dir1_mesh", "dir2_mesh"), directions, strict=True):
+        for setter, signed in zip(("dir1_mesh", "dir2_mesh"), directions, strict=True):
+            source = abs(signed)
             if not any(
                 f"{key}{source}" in args for key in ("nodes", "ratio", "meshtype", "meshpositions")
             ):
@@ -843,6 +832,10 @@ class _Builder:
                     "ERG_BAD_MESH", f"'{name}' direction {source}: {exc}", line=line
                 )
                 continue
+            if signed < 0:
+                # A box face that runs this direction backwards: the cuts stay
+                # where the box puts them, measured from the face's own start.
+                cuts = tuple(1.0 - cut for cut in reversed(cuts))
             setattr(mesh, setter, list(cuts))
 
     def _apply_activity(

@@ -688,7 +688,10 @@ class SolidFace(NamedTuple):
     suffix: str
     primitive: Primitive
     directions: tuple[int, int]
-    """Which of the source primitive's parametric directions this face's two are."""
+    """Which of the source primitive's parametric directions this face's two are.
+
+    A negative entry means the face runs that direction backwards: same cut
+    positions, measured from the other end."""
 
 
 class BoxSolid(NamedTuple):
@@ -737,19 +740,26 @@ BOXES: dict[str, BoxAxesBuilder] = {
 
 
 def box_faces(axes: BoxAxes) -> list[SolidFace]:
-    """Split a box into its six flat faces.
+    """Split a box into its six flat faces, in ESATAN's face and cell order.
+
+    With u, v, w the edges to point2, point3 and point4, ESATAN numbers the
+    faces w = 1, v = 0, u = 1, v = 1, u = 0, w = 0, one node sequence across
+    all six, each face with its first direction varying fastest.  On the faces
+    v = 1, u = 0 and w = 0 one direction runs backwards (-u, -v, -v), which is
+    what keeps every face's surface 1 outward.  Checked against the node
+    positions ESATAN-TMS 2026 writes for meshed boxes, ratios included.
 
     A closed shell has its *inside* as surface 2, so each face is built with its
     edges ordered to put the outward normal on surface 1.
     """
     origin, u, v, w = axes
     return [
-        SolidFace("face1", Rectangle(origin, origin + v, origin + u), (2, 1)),
-        SolidFace("face2", Rectangle(origin + w, origin + w + u, origin + w + v), (1, 2)),
-        SolidFace("face3", Rectangle(origin, origin + u, origin + w), (1, 3)),
-        SolidFace("face4", Rectangle(origin + v, origin + v + w, origin + v + u), (3, 1)),
-        SolidFace("face5", Rectangle(origin, origin + w, origin + v), (3, 2)),
-        SolidFace("face6", Rectangle(origin + u, origin + u + v, origin + u + w), (2, 3)),
+        SolidFace("face1", Rectangle(origin + w, origin + w + u, origin + w + v), (1, 2)),
+        SolidFace("face2", Rectangle(origin, origin + u, origin + w), (1, 3)),
+        SolidFace("face3", Rectangle(origin + u, origin + u + v, origin + u + w), (2, 3)),
+        SolidFace("face4", Rectangle(origin + v + u, origin + v, origin + v + u + w), (-1, 3)),
+        SolidFace("face5", Rectangle(origin + v, origin, origin + v + w), (-2, 3)),
+        SolidFace("face6", Rectangle(origin + v, origin + v + u, origin), (1, -2)),
     ]
 
 
