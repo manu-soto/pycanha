@@ -1,6 +1,7 @@
 """PyCanha — Thermal analysis Python package built on pycanha-core."""
 
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -13,6 +14,10 @@ if TYPE_CHECKING:
     LogLevel = pcc.LogLevel
     print_package_info = pcc.print_package_info
 
+try:
+    __version__ = version("pycanha")
+except PackageNotFoundError:  # pragma: no cover - a source tree that is not installed
+    __version__ = "0+unknown"
 
 __all__ = [
     "LogLevel",
