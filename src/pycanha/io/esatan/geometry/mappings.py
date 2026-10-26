@@ -1016,8 +1016,8 @@ def bulk_from_triple(name: str, values: Sequence[float]) -> BulkMaterial | None:
 
 #: ESATAN's eight-value optical row, in source order.
 #:
-#: The two diffuse reflectivities are derived (``refl = 1 - emiss - transm``),
-#: which is why pycanha keeps six numbers rather than eight.
+#: The two diffuse reflectivities are derived (``refl = 1 - emiss - transm -
+#: spec_refl``), which is why pycanha keeps six numbers rather than eight.
 OPTICAL_ROW = (
     "ir_emiss",
     "ir_refl",
