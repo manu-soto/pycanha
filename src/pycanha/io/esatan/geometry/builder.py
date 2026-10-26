@@ -24,6 +24,7 @@ geometry rather than raising:
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import TYPE_CHECKING
 
@@ -51,6 +52,7 @@ from .mappings import (
     OPTICAL_ROW,
     PRIMITIVES,
     PRISMS,
+    UNSET_VALUE,
     UNSUPPORTED_CONSTRUCTS,
     UNSUPPORTED_PRIMITIVES,
     Arguments,
@@ -82,6 +84,10 @@ __all__ = ["read_erg_into"]
 
 #: Declaration keywords that introduce a geometry symbol.
 _GEOMETRY_KINDS = frozenset({"GEOMETRY", "SHELL", "ASSEMBLY"})
+
+#: The fields of a BULK value, as ESATAN names them, and their place in the
+#: ``[density, specific heat, conductivity]`` triple.
+_BULK_FIELDS = {"density": 0, "sp_heat": 1, "cond": 2}
 
 #: Declaration keywords whose value is a plain number, string or point.
 _VALUE_KINDS = frozenset({"REAL", "INTEGER", "LOGICAL", "STRING", "POINT", "COORDINATE"})
@@ -132,6 +138,9 @@ class _Builder:
         self.diagnostics = diagnostics
         self.geometries: dict[str, GeometryItem | GeometryGroup | GeometryGroupCutted] = {}
         self.bulks: dict[str, pcc.gmm.BulkMaterial | None] = {}
+        #: Every bulk's ``[density, specific heat, conductivity]`` as last set,
+        #: so that one field can be assigned (``X.COND = ...``) or read.
+        self.bulk_values: dict[str, list[float]] = {}
         self.opticals: dict[str, OpticalMaterial] = {}
         self.variables: dict[str, Value] = {}
         self.declared: dict[str, str] = {}
@@ -527,11 +536,46 @@ class _Builder:
         if not quiet:
             self._report_unassigned_reads(expr, line)
         try:
-            return evaluate(expr, self.variables)
+            return evaluate(self._with_bulk_fields(expr), self.variables)
         except EvaluationError as exc:
             if not quiet:
                 self.diagnostics.warning("ERG_UNRESOLVED_VALUE", str(exc), line=line)
             return None
+
+    def _with_bulk_fields(self, expr: ast.Expr) -> ast.Expr:  # noqa: PLR0911
+        """*expr* with every read of a bulk's field (``AL.COND``) replaced by its value.
+
+        The evaluator resolves plain names only; a field of a bulk is the one
+        dotted read a model needs while it is being read, typically to build a
+        sandwich's properties from those of its layers.
+        """
+        if isinstance(expr, ast.Ref):
+            if len(expr.path) == 2 and expr.path[0] in self.bulk_values:
+                place = _BULK_FIELDS.get(expr.path[1].lower())
+                value = None if place is None else self.bulk_values[expr.path[0]][place]
+                if value is not None and value != UNSET_VALUE:
+                    return ast.Num(
+                        value, line=expr.line, end_line=expr.end_line, source=expr.source
+                    )
+            return expr
+        if isinstance(expr, ast.BinOp):
+            left, right = self._with_bulk_fields(expr.left), self._with_bulk_fields(expr.right)
+            if left is expr.left and right is expr.right:
+                return expr
+            return dataclasses.replace(expr, left=left, right=right)
+        if isinstance(expr, ast.UnaryOp):
+            operand = self._with_bulk_fields(expr.operand)
+            return expr if operand is expr.operand else dataclasses.replace(expr, operand=operand)
+        if isinstance(expr, ast.Vector | ast.Array):
+            items = tuple(self._with_bulk_fields(item) for item in expr.items)
+            return dataclasses.replace(expr, items=items)
+        if isinstance(expr, ast.Call):
+            return dataclasses.replace(
+                expr,
+                args={key: self._with_bulk_fields(arg) for key, arg in expr.args.items()},
+                positional=tuple(self._with_bulk_fields(arg) for arg in expr.positional),
+            )
+        return expr
 
     def _report_unassigned_reads(self, expr: ast.Expr, line: int) -> None:
         """Name array elements read before anything assigned them.
@@ -668,14 +712,72 @@ class _Builder:
         self.variables[name] = value
 
     def _store_bulk(self, name: str, expr: ast.Expr, line: int) -> None:
+        if isinstance(expr, ast.Ref) and len(expr.path) == 1 and expr.name in self.bulk_values:
+            # `X = AL;` copies another bulk's values; X is its own bulk from
+            # here on, so a later `X.COND = ...` does not change AL.
+            self._set_bulk(name, list(self.bulk_values[expr.name]))
+            return
         value = self._evaluate(expr, line)
         if value is None:
             return
         try:
             values = _numbers(value)
-            self.bulks[name] = bulk_from_triple(name, values)
+            bulk_from_triple(name, values)  # validates the triple
+            self._set_bulk(name, values)
         except (EvaluationError, TypeError, ValueError) as exc:
             self.diagnostics.warning("ERG_BAD_BULK", f"bulk '{name}': {exc}", line=line)
+
+    def _set_bulk(self, name: str, values: Sequence[float]) -> None:
+        """Record a bulk's triple and update its material, in place when it exists.
+
+        Shells hold the material object itself, so an update made after they
+        were built reaches them too: ESATAN resolves material values when it
+        calculates, not when the shell is defined.
+        """
+        self.bulk_values[name] = list(values)
+        if is_uninitialised_bulk(values) or UNSET_VALUE in values:
+            # Not usable until every field is set (`BULK X; X.DENSITY = ...`).
+            self.bulks.setdefault(name, None)
+            return
+        density, specific_heat, conductivity = values
+        existing = self.bulks.get(name)
+        if existing is None:
+            self.bulks[name] = bulk_from_triple(name, values)
+            return
+        existing.density = density
+        existing.specific_heat = specific_heat
+        existing.conductivity = conductivity
+
+    def _bulk_field(self, name: str, field: str, expr: ast.Expr, line: int) -> None:
+        """``X.COND = <expr>;``: one field of a bulk."""
+        place = _BULK_FIELDS.get(field.lower())
+        if place is None:
+            self.diagnostics.warning(
+                "ERG_BAD_BULK",
+                f"bulk '{name}' has no field '{field}'; the assignment was skipped",
+                line=line,
+            )
+            return
+        value = self._evaluate(expr, line)
+        if value is None:
+            return
+        if isinstance(value, tuple):
+            # An orthotropic conductivity: the first component is kept, as for
+            # DEFINE_BULK.
+            numbers = _numbers(value)
+            if not numbers:
+                return
+            value = numbers[0]
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            self.diagnostics.warning(
+                "ERG_BAD_BULK", f"bulk '{name}': {field} = {value!r} is not a number", line=line
+            )
+            return
+        values = list(self.bulk_values.get(name, [UNSET_VALUE] * 3))
+        values[place] = number
+        self._set_bulk(name, values)
 
     def _store_optical(self, name: str, expr: ast.Expr, environment: str | None, line: int) -> None:
         if environment is not None:
@@ -746,7 +848,8 @@ class _Builder:
                 args.real("sp_heat", 0.0),
                 components[0] if components else args.real("cond", 0.0),
             ]
-            self.bulks[name] = bulk_from_triple(name, values)
+            bulk_from_triple(name, values)  # validates the triple
+            self._set_bulk(name, values)
         except (EvaluationError, TypeError, ValueError) as exc:
             self.diagnostics.warning("ERG_BAD_BULK", f"bulk '{name}': {exc}", line=call.line)
 
@@ -1506,6 +1609,9 @@ class _Builder:
             return
         geometry = self.geometries.get(target.name)
         if geometry is None:
+            if self.declared.get(target.name) == "BULK" or target.name in self.bulk_values:
+                self._bulk_field(target.name, attribute, statement.value, statement.line)
+                return
             self._store_value(".".join(target.path), statement.value, statement.line)
             return
         call = ast.Call(
