@@ -1488,11 +1488,13 @@ def read_erg_into(
     *,
     strict: bool = False,
     on_diagnostic: Callable[[Diagnostic], None] | None = None,
+    parse_workers: int | None = None,
 ) -> DiagnosticCollector:
     """Read ESATAN geometry from *path* into an existing model.
 
     Returns the diagnostics produced, which is how a caller finds out what the
-    source expressed that the model does not.
+    source expressed that the model does not.  ``parse_workers`` above 1 parses
+    a large file on that many processes (the same result).
     """
     collector = DiagnosticCollector(
         source=str(path),
@@ -1500,7 +1502,7 @@ def read_erg_into(
         operation="Read ESATAN geometry",
         on_diagnostic=on_diagnostic,
     )
-    parsed = parse_file(path, collector=collector)
+    parsed = parse_file(path, collector=collector, workers=parse_workers)
     if parsed.name and parsed.name != model.name:
         collector.info(
             "ERG_MODEL_NAME",

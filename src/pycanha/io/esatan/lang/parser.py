@@ -429,12 +429,19 @@ def _parser() -> tuple[Lark, _AstBuilder]:
     return Lark(grammar, parser="lalr", transformer=builder), builder
 
 
-def parse(text: str, *, source_name: str = "<string>") -> ast.ModelFile:
+def parse(text: str, *, source_name: str = "<string>", workers: int | None = None) -> ast.ModelFile:
     """Parse ESATAN Workbench text into a :class:`~.ast.ModelFile`.
 
     Accepts both a complete model (``BEGIN_MODEL`` ... ``END_MODEL``) and a bare
     statement fragment such as an included ``.gmm`` file.
+
+    ``workers`` above 1 parses a large text in chunks on that many processes
+    (:mod:`.parallel`): the same tree, faster.
     """
+    if workers is not None and workers > 1:
+        from pycanha.io.esatan.lang.parallel import parse_parallel  # noqa: PLC0415 - imported only when asked for
+
+        return parse_parallel(text, source_name=source_name, workers=workers)
     if not text.strip():
         return ast.ModelFile(source=source_name)
     lark, builder = _parser()
@@ -454,9 +461,12 @@ def parse_file(
     path: str | Path,
     *,
     collector: DiagnosticCollector | None = None,
+    workers: int | None = None,
     _seen: frozenset[Path] = frozenset(),
 ) -> ast.ModelFile:
     """Parse a file, splicing every ``INCLUDE`` into the statement stream.
+
+    ``workers`` is passed to :func:`parse` for this file and its includes.
 
     Includes are resolved at the *statement* level rather than textually, so
     each file keeps its own line numbers in diagnostics.  Paths resolve relative
@@ -464,7 +474,7 @@ def parse_file(
     through ``collector`` (and raises when there is none).
     """
     resolved = Path(path).resolve()
-    parsed = parse(resolved.read_text(encoding="utf-8", errors="replace"), source_name=str(path))
+    parsed = parse(resolved.read_text(encoding="utf-8", errors="replace"), source_name=str(path), workers=workers)
     statements: list[ast.Statement] = []
     for statement in parsed.statements:
         statements.append(statement)
@@ -474,7 +484,7 @@ def parse_file(
         if target is None or target in _seen or target == resolved:
             _report_include_problem(statement, target, collector)
             continue
-        included = parse_file(target, collector=collector, _seen=_seen | {resolved})
+        included = parse_file(target, collector=collector, workers=workers, _seen=_seen | {resolved})
         statements.extend(included.statements)
     return ast.ModelFile(
         parsed.name,

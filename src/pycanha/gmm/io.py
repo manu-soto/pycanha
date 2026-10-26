@@ -46,6 +46,7 @@ class GeometryIo:
         *,
         strict: bool = False,
         on_diagnostic: Callable[[Diagnostic], None] | None = None,
+        parse_workers: int | None = None,
     ) -> DiagnosticCollector:
         """Load ESATAN geometry into this model, in place.
 
@@ -57,8 +58,13 @@ class GeometryIo:
         at.  The returned collector holds every such report, each with a stable
         code; passing ``strict=True`` instead raises on the first one that
         matters, and ``on_diagnostic`` receives them as they are produced.
+        ``parse_workers`` above 1 parses a large file on that many processes:
+        the same model, faster (the calling script needs an
+        ``if __name__ == "__main__":`` guard where processes are spawned).
         """
-        return builder.read_erg_into(self._model, path, strict=strict, on_diagnostic=on_diagnostic)
+        return builder.read_erg_into(
+            self._model, path, strict=strict, on_diagnostic=on_diagnostic, parse_workers=parse_workers
+        )
 
     def write_esatan_erg(
         self,
