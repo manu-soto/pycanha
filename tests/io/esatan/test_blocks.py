@@ -292,6 +292,27 @@ class TestParseConductors:
         assert gl.get_coupling_value(1, 2) == pytest.approx(0.5 + 6.0 + 0.25)
         assert gl.get_coupling_value(2, 3) == pytest.approx(6.0)
 
+    def test_geometric_node_entities_in_expression(self, reader: ESATANReader) -> None:
+        # A, ALP, EPS and FX/FY/FZ of a node are fixed data: their value is used.
+        for nn, area in ((1, 0.5), (2, 0.25)):
+            n = pc.tmm.Node(nn)
+            n.T = 25.0
+            n.a = area
+            n.eps = 0.8
+            reader._tmm.add_node(n)
+        reader.parse_constants("$REAL\n  KFAC = 4.0;\n")
+        reader.parse_conductors("GL(1, 2) = A1 * 2.0;\nGR(1, 2) = A2 * EPS2 * KFAC;\n")
+        reader._apply_pending_formulas()
+        assert reader._tmm.conductive_couplings.get_coupling_value(1, 2) == pytest.approx(1.0)
+        assert reader._tmm.radiative_couplings.get_coupling_value(1, 2) == pytest.approx(0.8)
+
+    def test_user_constant_named_like_a_node_entity(self, reader: ESATANReader) -> None:
+        self._setup_nodes(reader)
+        reader.parse_constants("$REAL\n  A1 = 3.0;\n")
+        reader.parse_conductors("GL(1, 2) = A1 * 2.0;\n")
+        reader._apply_pending_formulas()
+        assert reader._tmm.conductive_couplings.get_coupling_value(1, 2) == pytest.approx(6.0)
+
 
 # ------------------------------------------------ intrinsics rejected for now
 
