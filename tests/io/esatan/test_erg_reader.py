@@ -78,6 +78,51 @@ def test_disc_model_materials() -> None:
     assert (mesh.side1_thick, mesh.side2_thick) == pytest.approx((0.005, 0.005))
 
 
+@pytest.mark.parametrize(
+    ("side1", "side2", "nbase2", "capacitance", "in_plane"),
+    [
+        # ESATAN-TMS 2026 for a 0.2 x 0.1 m strip of 2 x 1 cells, 2 mm of
+        # aluminium (the whole thickness: C = 48.6 J/K a cell, GL = 0.3 W/K):
+        # half the thickness on each surface, whatever their activity.
+        ("Active", "Inactive", 1, {1: 24.3}, {(1, 2): 0.15}),
+        ("Conductive", "Inactive", 1, {1: 24.3}, {(1, 2): 0.15}),
+        ("Radiative", "Inactive", 1, {1: 24.3}, {}),
+        ("Radiative", "Radiative", 1, {1: 48.6}, {}),
+        ("Radiative", "Active", 11, {1: 24.3, 11: 24.3}, {(11, 12): 0.15}),
+        ("Active", "Active", 1, {1: 48.6}, {(1, 2): 0.3}),
+    ],
+)
+def test_single_thickness_is_halved_onto_each_surface(
+    tmp_path: Path,
+    side1: str,
+    side2: str,
+    nbase2: int,
+    capacitance: dict[int, float],
+    in_plane: dict[tuple[int, int], float],
+) -> None:
+    path = tmp_path / "strip.erg"
+    path.write_text(
+        "BEGIN_MODEL M\n"
+        "OPTICAL BLK;\nBLK = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];\n"
+        'BULK AL;\nDEFINE_BULK (bulk = AL, density = 2700.0, sp_heat = 900.0, type = "Isotropic", '
+        "cond = 150.0);\n"
+        "GEOMETRY S;\nS = SHELL_RECTANGLE(point1 = [0.0, 0.0, 0.0], point2 = [0.2, 0.0, 0.0], "
+        f'point4 = [0.0, 0.1, 0.0], side1 = "{side1}", side2 = "{side2}", nbase1 = 1, '
+        f'nbase2 = {nbase2}, opt1 = BLK, opt2 = BLK, bulk = AL, composition = "SINGLE", '
+        "thick = 0.002, nodes1 = 2, nodes2 = 1);\nM = S;\nEND_MODEL\n",
+        encoding="utf-8",
+    )
+    thermal_model = ThermalModel("M")
+    thermal_model.gmm.io.read_esatan_erg(path)
+    thermal_model.build_tmm_from_gmm()
+    nodes = thermal_model.tmm.nodes
+    for node, expected in capacitance.items():
+        assert nodes.get_C(node) == pytest.approx(expected), node
+    couplings = thermal_model.tmm.conductive_couplings
+    for (n1, n2), expected in in_plane.items():
+        assert couplings.get_coupling_value(n1, n2) == pytest.approx(expected), (n1, n2)
+
+
 def test_disc_model_node_merging() -> None:
     """Equal nbase and ndelta on both surfaces give one node through the thickness."""
     model = GeometryModel("DISCTR")
