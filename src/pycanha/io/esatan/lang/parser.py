@@ -44,6 +44,9 @@ __all__ = ["parse", "parse_file"]
 _INCLUDE_SUFFIXES = ("", ".gmm", ".erg")
 
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+#: A comment, a string, or a comment terminator outside both (the grammar's
+#: COMMENT and STRING terminals).
+_COMMENT_STRING_OR_END_RE = re.compile(r'/\*.*?\*/|"[^"]*"|\*/', re.DOTALL)
 
 
 class _Pos(TypedDict):
@@ -464,7 +467,18 @@ def parse_file(
     through ``collector`` (and raises when there is none).
     """
     resolved = Path(path).resolve()
-    parsed = parse(resolved.read_text(encoding="utf-8", errors="replace"), source_name=str(path))
+    text = resolved.read_text(encoding="utf-8", errors="replace")
+    if collector is not None:
+        # ESATAN reports a stray comment terminator as a syntax error and goes
+        # on with the next statement; to the grammar it would end the read.
+        text, stray_lines = _blank_stray_comment_ends(text)
+        for line in stray_lines:
+            collector.error(
+                "ERG_STRAY_COMMENT_END",
+                f"{path}:{line}: '*/' closes no comment; ignored",
+                line=line,
+            )
+    parsed = parse(text, source_name=str(path))
     statements: list[ast.Statement] = []
     for statement in parsed.statements:
         statements.append(statement)
@@ -484,6 +498,31 @@ def parse_file(
         end_line=parsed.end_line,
         source=parsed.source,
     )
+
+
+def _blank_stray_comment_ends(text: str) -> tuple[str, list[int]]:
+    """Blank every ``*/`` that closes no comment; return the text and their lines.
+
+    Comments and strings are skipped over, so only a terminator outside both
+    (typically a comment closed twice) is touched. It becomes two spaces, which
+    keeps every line and column in place for the diagnostics.
+    """
+    if "*/" not in text:
+        return text, []
+    pieces: list[str] = []
+    lines: list[int] = []
+    last = 0
+    for match in _COMMENT_STRING_OR_END_RE.finditer(text):
+        if match.group() != "*/":
+            continue
+        pieces.append(text[last : match.start()])
+        pieces.append("  ")
+        lines.append(text.count("\n", 0, match.start()) + 1)
+        last = match.end()
+    if not lines:
+        return text, []
+    pieces.append(text[last:])
+    return "".join(pieces), lines
 
 
 def _resolve_include(raw: str, base: Path) -> Path | None:
