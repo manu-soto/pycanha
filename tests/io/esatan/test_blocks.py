@@ -74,6 +74,36 @@ class TestParseConstants:
         assert not params.contains("bad")
         assert params.contains("good")
 
+    def test_character_section(self, reader: ESATANReader) -> None:
+        reader.parse_constants(
+            "$CHARACTER\n  SET_CASE = 'HOT';\n  NOTE = 'A;B';\n  QUOTE = 'IT''S';\n"
+            "$REAL\n  k = 2.0;\n"
+        )
+        params = reader._tmm.parameters
+        assert params.get_parameter("SET_CASE") == "HOT"
+        assert params.get_parameter("NOTE") == "A;B"
+        assert params.get_parameter("QUOTE") == "IT'S"
+        # A character constant does not enter the arithmetic of the others.
+        reader.parse_constants("$REAL\n  k2 = k * 2;\n")
+        assert params.get_parameter("k2") == pytest.approx(4.0)
+
+    def test_own_type_overrides_section(self, reader: ESATANReader) -> None:
+        # ESATAN User Manual, $CONSTANTS example.
+        reader.parse_constants(
+            "INTEGER*ILNRST= 99;REAL*QWERTY= 15.62;\n"
+            "REAL*AB23= 4.56E03;CHARACTER*ZPROCESS= 'HELLO';\n"
+        )
+        params = reader._tmm.parameters
+        assert params.get_parameter("ILNRST") == 99
+        assert isinstance(params.get_parameter("ILNRST"), int)
+        assert params.get_parameter("QWERTY") == pytest.approx(15.62)
+        assert params.get_parameter("AB23") == pytest.approx(4.56e03)
+        assert params.get_parameter("ZPROCESS") == "HELLO"
+
+    def test_character_constant_must_be_a_literal(self, reader: ESATANReader) -> None:
+        reader.parse_constants("$CHARACTER\n  BAD = OTHER;\n")
+        assert not reader._tmm.parameters.contains("BAD")
+
 
 # ----------------------------------------------------------------- $ARRAYS
 
