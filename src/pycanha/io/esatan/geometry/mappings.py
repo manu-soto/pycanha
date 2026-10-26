@@ -976,6 +976,10 @@ ACTIVITY: dict[str, tuple[bool, bool]] = {
     "conductive": (False, True),
 }
 
+#: Other activity names ESATAN reads, and the :data:`ACTIVITY` entry each one
+#: is: "THM_ACTIVE" is a surface that only conducts.
+ACTIVITY_ALIASES: dict[str, str] = {"thm_active": "conductive"}
+
 #: The reverse of :data:`ACTIVITY`, for the writer.
 _ACTIVITY_NAMES: dict[tuple[bool, bool], str] = {
     sides: name.capitalize() for name, sides in ACTIVITY.items()

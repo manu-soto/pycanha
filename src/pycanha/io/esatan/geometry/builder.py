@@ -44,6 +44,7 @@ from ..lang.evaluate import EvaluationError, as_int, evaluate
 from ..lang.parser import parse_file
 from .mappings import (
     ACTIVITY,
+    ACTIVITY_ALIASES,
     BOXES,
     GEOMETRY_ALTERING_PROCEDURES,
     OPTICAL_PROPERTIES,
@@ -995,6 +996,7 @@ class _Builder:
             if f"side{side}" not in args:
                 continue
             raw = args.text(f"side{side}", "Active").strip().lower()
+            raw = ACTIVITY_ALIASES.get(raw, raw)
             if raw not in ACTIVITY:
                 self.diagnostics.warning(
                     "ERG_UNKNOWN_ACTIVITY", f"unknown surface activity '{raw}'", line=line
