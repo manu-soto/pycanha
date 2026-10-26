@@ -77,6 +77,53 @@ def test_disc_model_materials() -> None:
     assert (mesh.side1_thick, mesh.side2_thick) == pytest.approx((0.005, 0.005))
 
 
+def test_bulks_filled_by_assignments(tmp_path: Path) -> None:
+    # Expected: the k / Cp / Dens ESATAN-TMS 2026 writes for these bulks.
+    plates = "".join(
+        f"GEOMETRY P{k};\nP{k} = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0, bulk = B{k}, "
+        "thick = 0.002);\n"
+        for k in (1, 2, 3)
+    )
+    model, diagnostics = build(
+        tmp_path,
+        'BULK AL;\nDEFINE_BULK (bulk = AL, density = 2700.0, sp_heat = 900.0, type = "Isotropic", '
+        "cond = 150.0);\n"
+        'BULK CU;\nDEFINE_BULK (bulk = CU, density = 8960.0, sp_heat = 385.0, type = "Isotropic", '
+        "cond = 400.0);\n"
+        "BULK B1;\nB1 = AL;\nB1.COND = 2.0 * AL.COND;\n"
+        "BULK B2;\nB2 = AL;\nB2.DENSITY = (AL.DENSITY * 1.0e-3 + CU.DENSITY * 2.0e-3) / 3.0e-3;\n"
+        "B2.SP_HEAT = 500.0;\nB2.COND = CU.COND / 4.0;\n"
+        "BULK B3 = [1000.0, 1000.0, 1.0];\nB3.COND = 5.0;\n"
+        + plates
+        + "GEOMETRY M;\nM = P1 + P2 + P3;",
+    )
+    assert "ERG_UNKNOWN_BULK" not in diagnostics.codes()
+    assert "ERG_UNRESOLVED_VALUE" not in diagnostics.codes()
+    expected = {
+        "P1": (2700.0, 900.0, 300.0),
+        "P2": (6873.3333, 500.0, 100.0),
+        "P3": (1000.0, 1000.0, 5.0),
+    }
+    for plate, triple in expected.items():
+        bulk = model.get_item(plate).thermal_mesh.side1_material
+        assert bulk is not None, plate
+        assert (bulk.density, bulk.specific_heat, bulk.conductivity) == pytest.approx(
+            triple, rel=1e-6
+        ), plate
+
+
+def test_a_bulk_field_set_after_its_shell_reaches_the_shell(tmp_path: Path) -> None:
+    model, _ = build(
+        tmp_path,
+        "BULK B = [1000.0, 1000.0, 1.0];\n"
+        "GEOMETRY P;\nP = SHELL_SCS_RECTANGLE(xmax = 1.0, ymax = 1.0, bulk = B, thick = 0.002);\n"
+        "B.COND = 5.0;",
+    )
+    bulk = model.get_item("P").thermal_mesh.side1_material
+    assert bulk is not None
+    assert bulk.conductivity == pytest.approx(5.0)
+
+
 def test_disc_model_node_merging() -> None:
     """Equal nbase and ndelta on both surfaces give one node through the thickness."""
     model = GeometryModel("DISCTR")
