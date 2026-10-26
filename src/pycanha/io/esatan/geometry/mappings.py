@@ -975,26 +975,19 @@ def activity_name(*, radiative: bool, conductive: bool) -> str:
     return _ACTIVITY_NAMES[radiative, conductive]
 
 
-def split_thickness(
-    total: float, side1_conductive: bool, side2_conductive: bool
-) -> tuple[float, float]:
+def split_thickness(total: float) -> tuple[float, float]:
     """Share a ``composition = "SINGLE"`` thickness between the two surfaces.
 
     ESATAN carries one thickness for the whole shell; pycanha stores one per
-    side.  Half goes to each participating surface, matching how ESATAN itself
-    splits a single thickness when it exports a model, and all of it to the one
-    surface that participates when only one does.
-
-    Participating means *conductively* active: a thickness is only ever read as
-    a conduction length, so a side that does not conduct has no use for one.
+    side.  ESATAN gives half of it to the nodes of each surface, for the
+    capacitance and for the conductors, whatever the surfaces' activity: a
+    node on both surfaces has the two halves, a node on one surface has one
+    half (Workbench User Manual 8.1.5.3; the STEP-TAS mapping of ``thick``:
+    "If only one surface is active only half of the thickness will be used").
+    A side that does not conduct contributes nothing to the conduction build
+    anyway, so its half only enters the capacitance.
     """
-    if side1_conductive and side2_conductive:
-        return total / 2.0, total / 2.0
-    if side1_conductive:
-        return total, 0.0
-    if side2_conductive:
-        return 0.0, total
-    return 0.0, 0.0
+    return total / 2.0, total / 2.0
 
 
 def bulk_from_triple(name: str, values: Sequence[float]) -> BulkMaterial | None:

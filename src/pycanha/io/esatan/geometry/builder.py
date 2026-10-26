@@ -957,11 +957,7 @@ class _Builder:
             return
         if "thick" not in args:
             return
-        first, second = split_thickness(
-            args.real("thick", 0.0),
-            mesh.is_conductive_active(1),
-            mesh.is_conductive_active(2),
-        )
+        first, second = split_thickness(args.real("thick", 0.0))
         if 1 in sides:
             mesh.side1_thick = first
         if 2 in sides:
