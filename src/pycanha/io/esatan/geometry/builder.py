@@ -186,17 +186,14 @@ class _Builder:
         again, but outside the model geometry until they are."""
         self._deleted: list[GeometryItem | GeometryGroup | GeometryGroupCutted] = []
         """Geometries DELETE_GEOMETRY took out, kept alive but never attached."""
-
         self._removed: list[GeometryItem] = []
         """Geometries taken out by REMOVE_FACE (whole face pairs).  The objects
         themselves are kept: an id() of a dropped wrapper can be reused."""
         self._faces: dict[str, list[GeometryItem]] = {}
         """The faces of each decomposed box / prism, in ESATAN's order, as built
         (REMOVE_FACE counts face pairs over all of them, removed or not)."""
-
         self._rebound: list[object] = []
         """Group members replaced by a later definition of their name (kept alive)."""
-
         self._retired: list[object] = []
         """Objects replaced by a renamed copy (kept alive, never attached)."""
 
@@ -439,7 +436,6 @@ class _Builder:
             self._apply_transform(function, call, statement.line)
         elif function in ("DELETE_GEOMETRY", "DELETE_SHELL"):
             self._delete_geometry(call)
-
         elif function in ("RENAME", "RENAME_GEOMETRY"):
             self._rename(call)
         elif function in GEOMETRY_ALTERING_PROCEDURES:
