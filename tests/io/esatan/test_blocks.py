@@ -135,6 +135,24 @@ class TestParseNodes:
         node = reader._tmm.nodes.get_node_from_node_num(3)
         assert pytest.approx(1.0e-7 * 2900.0 * 1400.0) == node.C
 
+    def test_entities_by_position(self, reader: ESATANReader) -> None:
+        # ESATAN's order: T, C, QA, QE, QI, QS, QR, A, ALP, EPS, ...
+        reader.parse_nodes("D4, 15.0, 3.0;\nD5 = 'p', 20.0, 2.0, 0.0, 0.0, 7.5, 0.0, 0.0, 0.25;\n")
+        node4 = reader._tmm.nodes.get_node_from_node_num(4)
+        assert pytest.approx(15.0) == node4.T
+        assert pytest.approx(3.0) == node4.C
+        node5 = reader._tmm.nodes.get_node_from_node_num(5)
+        assert pytest.approx(7.5) == node5.qi
+        assert pytest.approx(0.25) == node5.a
+
+    def test_entities_by_position_then_by_name(self, reader: ESATANReader) -> None:
+        reader.parse_nodes("D6 = 'p', 10.0, 4.0, EPS = 0.8, A = 0.5;\n")
+        node = reader._tmm.nodes.get_node_from_node_num(6)
+        assert pytest.approx(10.0) == node.T
+        assert pytest.approx(4.0) == node.C
+        assert pytest.approx(0.8) == node.eps
+        assert pytest.approx(0.5) == node.a
+
 
 # ------------------------------------------------------------ $CONDUCTORS
 
