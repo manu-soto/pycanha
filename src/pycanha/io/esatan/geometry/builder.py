@@ -158,6 +158,8 @@ class _Builder:
         """Prisms still read as geometry, as (line, wall count, is meshed)."""
         self._skipped: dict[str, str] = {}
         """Names deliberately not built, and the construct that each one was."""
+        self._retired: list[object] = []
+        """Objects replaced by a renamed copy (kept alive, never attached)."""
 
     # -- entry point -------------------------------------------------------
 
@@ -405,6 +407,8 @@ class _Builder:
             self._override(call)
         elif function in _TRANSFORMS:
             self._apply_transform(function, call, statement.line)
+        elif function in ("RENAME", "RENAME_GEOMETRY"):
+            self._rename(call)
         elif function in GEOMETRY_ALTERING_PROCEDURES:
             self.diagnostics.error(
                 "ERG_FACE_EDIT",
@@ -413,6 +417,84 @@ class _Builder:
             )
         else:
             self.unhandled.append(statement)
+
+    def _rename(self, call: ast.Call) -> None:
+        """``RENAME(old_name = "X", new_name = "Y")``, and the older
+        ``RENAME_GEOMETRY(geometry = X, new_name = "Y")``.
+
+        ESATAN renames the symbol: from there on the object is Y -- moved,
+        combined and labelled under that name -- and X no longer exists.  A
+        geometry is rebuilt under the new name, since the core fixes a name at
+        construction, and put back where the old object was; any other symbol
+        keeps its value under the new name.
+        """
+        args = self._arguments(call)
+        if call.name.upper() == "RENAME_GEOMETRY":
+            ref = call.args.get("geometry")
+            old = ref.name if isinstance(ref, ast.Ref) else ""
+        else:
+            old = args.text("old_name", "")
+        new = args.text("new_name", "")
+        known = any(
+            old in table
+            for table in (self.geometries, self.declared, self.variables, self.opticals, self.bulks)
+        )
+        if not old or not new or not known:
+            self.diagnostics.warning(
+                "ERG_RENAME_TARGET",
+                f"{call.name} names a symbol that does not exist ('{old}' -> '{new}')",
+                line=call.line,
+            )
+            return
+        _move_key(self.variables, old, new)
+        _move_key(self.opticals, old, new)
+        _move_key(self.bulks, old, new)
+        _move_key(self.arrays, old, new)
+        _move_key(self.unassigned, old, new)
+        _move_key(self.declared, old, new)
+        if old in self.geometries:
+            self._rename_geometry(old, new)
+
+    def _rename_geometry(self, old: str, new: str) -> None:
+        geometry = self.geometries.pop(old)
+        parent = next(
+            (
+                known
+                for known in self.geometries.values()
+                if isinstance(known, GeometryGroup)
+                and any(child is geometry for child in known.children)
+            ),
+            None,
+        )
+        renamed: GeometryItem | GeometryGroup | GeometryGroupCutted
+        if isinstance(geometry, GeometryItem):
+            renamed = GeometryItem(
+                new, geometry.primitive, geometry.thermal_mesh, geometry.transform
+            )
+        elif isinstance(geometry, GeometryGroup):
+            children = list(geometry.children)
+            for child in children:
+                geometry.remove_child(child)
+            renamed = GeometryGroup(new, children, geometry.transform)
+        else:
+            # A cut group keeps its core name: its targets cannot be handed to a
+            # new one here.  The symbol is still renamed.
+            renamed = geometry
+        if parent is not None and renamed is not geometry:
+            parent.remove_child(geometry)
+            parent.add(renamed)
+        self._retired.append(geometry)
+        self.geometries[new] = renamed
+        self._order[self._order.index(old)] = new
+        if old in self.consumed:
+            self.consumed.discard(old)
+            self.consumed.add(new)
+        _move_key(self.senses, old, new)
+        _move_key(self.box_axes, old, new)
+        _move_key(self.prism_corners, old, new)
+        _move_key(self._boxes, old, new)
+        _move_key(self._prisms, old, new)
+        _move_key(self._skipped, old, new)
 
     # -- values and materials ----------------------------------------------
 
@@ -1411,6 +1493,12 @@ class _Builder:
         for target in targets:
             for item in _items_of(target):
                 self._apply_attributes(item.name, item, call, args, sides, line)
+
+
+def _move_key[V](table: dict[str, V], old: str, new: str) -> None:
+    """Re-key *table*'s entry for *old* under *new*, if it has one."""
+    if old in table:
+        table[new] = table.pop(old)
 
 
 def _items_of(
