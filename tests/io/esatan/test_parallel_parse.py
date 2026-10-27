@@ -9,6 +9,7 @@ left-nested sum.
 from __future__ import annotations
 
 import pickle
+import random
 
 import pytest
 
@@ -63,6 +64,17 @@ def test_parallel_parse_gives_the_serial_tree(header: bool) -> None:
 def test_flow_control_is_parsed_whole() -> None:
     text = _model(extra="IF (GAP > 0.0) THEN\n    REAL Q = 1.0;\nEND_IF")
     assert parse(text, workers=2) == parse(text)
+
+
+def test_the_flow_keyword_check_answers_as_the_regex() -> None:
+    words = ["IF", "then", "Else", "END_IF", "for", "WHILE", "until", "END_SWITCH", "case", "DEFAULT", "IFX", "XIF",
+             "_IF", "IF_", "1IF", "IF1", "DIFF", "FORMAT", "CASE_1", "A", "_", "0", " ", ";", "(", "\n", "é"]
+    rng = random.Random(3)
+    for _ in range(2000):
+        text = "".join(rng.choice(words) + rng.choice(("", " ")) for _ in range(rng.randint(0, 10)))
+        lo = rng.randint(0, len(text))
+        hi = rng.randint(lo, len(text))
+        assert parallel._has_flow(text, lo, hi) == (parallel._FLOW.search(text, lo, hi) is not None), (text, lo, hi)
 
 
 @pytest.mark.usefixtures("small_threshold")

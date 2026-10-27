@@ -46,6 +46,44 @@ _WS = " \t\f\r\n"  # the grammar's ignored whitespace (common.WS), not every Uni
 _NAME_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
 
 
+_FLOW_WORDS = (
+    "IF",
+    "THEN",
+    "ELSE",
+    "END_IF",
+    "FOR",
+    "END_FOR",
+    "WHILE",
+    "END_WHILE",
+    "REPEAT",
+    "UNTIL",
+    "END_REPEAT",
+    "SWITCH",
+    "CASE",
+    "DEFAULT",
+    "END_SWITCH",
+)
+
+
+def _has_flow(masked: str, start: int, end: int) -> bool:
+    """Whether ``_FLOW.search(masked, start, end)`` would match, found with ``str.find`` on the upper-cased text
+    and the same boundary tests: on 15 M characters the regex takes about 2 s, this about 0.1 s. A text with any
+    non-ASCII character goes to the regex, whose case rules reach beyond ASCII."""
+    if not masked.isascii():
+        return _FLOW.search(masked, start, end) is not None
+    up = masked.upper()
+    for word in _FLOW_WORDS:
+        i = up.find(word, start, end)
+        while i >= 0:
+            before = up[i - 1] if i > 0 else ""  # the lookbehind sees before start, as re's does
+            j = i + len(word)
+            after = up[j] if j < end else ""  # the lookahead stops at end
+            if not (before.isalpha() or before == "_") and not (after.isalnum() or after == "_"):
+                return True
+            i = up.find(word, i + 1, end)
+    return False
+
+
 def _mask(text: str) -> str:
     return _COMMENT_OR_STRING.sub(lambda m: " " * len(m.group(0)), text)
 
@@ -151,7 +189,7 @@ def parse_parallel(text: str, *, source_name: str = "<string>", workers: int = 2
         body = (header.end(), len(tail) - 9)
     else:
         body = (0, len(text))
-    if _FLOW.search(masked, body[0], body[1]):
+    if _has_flow(masked, body[0], body[1]):
         return _parser.parse(text, source_name=source_name)
     starts = [body[0], *_cuts(masked, body[0], body[1], 3 * workers)]
     bounds = list(zip(starts, [*starts[1:], body[1]], strict=True))
