@@ -141,6 +141,9 @@ class _Builder:
         #: Elements of each array that no assignment has reached yet, so that
         #: reading one can be reported.
         self.unassigned: dict[str, set[int]] = {}
+        #: How many elements of :attr:`unassigned` are pending in all; while it
+        #: is zero no read can be one of them, so expressions are not walked.
+        self._unassigned_count = 0
         #: Arrays declared with more than one dimension.  Usable whole, but not
         #: indexable, so a write to one is refused rather than left to overwrite
         #: the whole table.
@@ -433,6 +436,8 @@ class _Builder:
         the model loads; but a corner silently at the origin is a mistake that
         shows up much later as degenerate geometry, if at all.
         """
+        if not self._unassigned_count:
+            return
         for index in _iter_indices(expr):
             pending = self.unassigned.get(index.name)
             if pending is None or len(index.indices) != 1:
@@ -488,6 +493,7 @@ class _Builder:
             self.diagnostics.warning("ERG_UNRESOLVED_VALUE", str(exc), line=statement.line)
             return
 
+        self._unassigned_count -= len(self.unassigned.get(name, ()))
         if isinstance(initial, tuple) and len(initial) == count:
             self.arrays[name] = list(initial)
             self.unassigned[name] = set()
@@ -495,6 +501,7 @@ class _Builder:
             zero: Value = (0.0, 0.0, 0.0) if kind in ("POINT", "COORDINATE") else 0.0
             self.arrays[name] = [zero] * count
             self.unassigned[name] = set(range(1, count + 1))
+            self._unassigned_count += count
             if initial is not None:
                 # Kept whole rather than spread over elements, since how it maps
                 # onto them is exactly what the length disagreement leaves open.
@@ -537,7 +544,9 @@ class _Builder:
             return
 
         elements[index - 1] = value
-        self.unassigned[name].discard(index)
+        if index in self.unassigned[name]:
+            self.unassigned[name].discard(index)
+            self._unassigned_count -= 1
         self.variables[name] = tuple(elements)
 
     def _store_value(self, name: str, expr: ast.Expr, line: int) -> None:
